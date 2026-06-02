@@ -1,0 +1,78 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    @apply bg-sa-bg text-sa-text antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-sa-bg;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-sa-border rounded-full;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-sa-muted;
+  }
+
+  * {
+    @apply border-sa-border;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-sa-surface border border-sa-border rounded-xl;
+  }
+
+  .btn-primary {
+    @apply bg-sa-accent text-sa-bg font-semibold px-4 py-2 rounded-lg
+           hover:bg-sa-accent-dim transition-colors duration-200
+           focus:outline-none focus:ring-2 focus:ring-sa-accent focus:ring-offset-2 focus:ring-offset-sa-bg;
+  }
+
+  .btn-secondary {
+    @apply bg-transparent text-sa-text border border-sa-border px-4 py-2 rounded-lg
+           hover:bg-sa-surface hover:border-sa-accent transition-all duration-200
+           focus:outline-none focus:ring-2 focus:ring-sa-accent focus:ring-offset-2 focus:ring-offset-sa-bg;
+  }
+
+  .status-dot {
+    @apply w-2 h-2 rounded-full inline-block;
+  }
+
+  .status-dot.active {
+    @apply bg-sa-green shadow-[0_0_6px_rgba(0,255,178,0.6)];
+  }
+
+  .status-dot.inactive {
+    @apply bg-sa-muted;
+  }
+
+  .status-dot.warning {
+    @apply bg-sa-yellow shadow-[0_0_6px_rgba(255,184,0,0.6)];
+  }
+
+  .mono {
+    @apply font-mono text-sm;
+  }
+
+  .address {
+    @apply font-mono text-xs text-sa-text-dim;
+  }
+
+  .section-title {
+    @apply font-display text-lg font-semibold text-sa-text;
+  }
+
+  .label {
+    @apply text-xs font-medium text-sa-text-dim uppercase tracking-wider;
+  }
+}
