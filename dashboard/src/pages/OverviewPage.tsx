@@ -18,8 +18,8 @@ import {
   AddressChip,
   SectionHeader,
   ProgressBar,
-} from '../ui/index.js';
-import { MOCK_AGENTS, MOCK_PAYMENTS, MOCK_SPEND_DATA } from '../../lib/mockData.js';
+} from '../components/ui/index.js';
+import { MOCK_AGENTS, MOCK_PAYMENTS, MOCK_SPEND_DATA } from '../lib/mockData.js';
 
 // ─── Custom Tooltip ───────────────────────────────────────────────────────────
 
