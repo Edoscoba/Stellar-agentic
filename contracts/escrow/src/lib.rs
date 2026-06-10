@@ -11,10 +11,7 @@
 //! 4. Agent A (or arbiter) calls `release` — funds go to Agent B
 //! 5. If Agent B doesn't deliver, Agent A calls `refund` after deadline
 
-use soroban_sdk::{
-    contract, contractimpl, contracttype,
-    token, Address, Bytes, Env, Map,
-};
+use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Bytes, Env, Map};
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -113,7 +110,10 @@ impl Escrow {
         Self::save_job(&env, job_id, job);
 
         env.events().publish(
-            (soroban_sdk::symbol_short!("escrow"), soroban_sdk::symbol_short!("created")),
+            (
+                soroban_sdk::symbol_short!("escrow"),
+                soroban_sdk::symbol_short!("created"),
+            ),
             (job_id, requester, amount),
         );
 
@@ -138,7 +138,10 @@ impl Escrow {
         Self::save_job(&env, job_id, job);
 
         env.events().publish(
-            (soroban_sdk::symbol_short!("escrow"), soroban_sdk::symbol_short!("accepted")),
+            (
+                soroban_sdk::symbol_short!("escrow"),
+                soroban_sdk::symbol_short!("accepted"),
+            ),
             (job_id, worker),
         );
     }
@@ -166,7 +169,10 @@ impl Escrow {
         Self::save_job(&env, job_id, job);
 
         env.events().publish(
-            (soroban_sdk::symbol_short!("escrow"), soroban_sdk::symbol_short!("result")),
+            (
+                soroban_sdk::symbol_short!("escrow"),
+                soroban_sdk::symbol_short!("result"),
+            ),
             (job_id, worker),
         );
     }
@@ -183,7 +189,11 @@ impl Escrow {
 
         // Only requester or arbiter can release
         let is_requester = job.requester == releaser;
-        let is_arbiter = job.arbiter.as_ref().map(|a| *a == releaser).unwrap_or(false);
+        let is_arbiter = job
+            .arbiter
+            .as_ref()
+            .map(|a| *a == releaser)
+            .unwrap_or(false);
 
         if !is_requester && !is_arbiter {
             panic!("not authorized to release");
@@ -199,7 +209,10 @@ impl Escrow {
         Self::save_job(&env, job_id, job.clone());
 
         env.events().publish(
-            (soroban_sdk::symbol_short!("escrow"), soroban_sdk::symbol_short!("released")),
+            (
+                soroban_sdk::symbol_short!("escrow"),
+                soroban_sdk::symbol_short!("released"),
+            ),
             (job_id, worker, job.amount),
         );
     }
@@ -222,9 +235,7 @@ impl Escrow {
             panic!("job cannot be refunded");
         }
 
-        if env.ledger().sequence() < job.deadline_ledger
-            && job.status != JobStatus::Open
-        {
+        if env.ledger().sequence() < job.deadline_ledger && job.status != JobStatus::Open {
             panic!("deadline not reached yet");
         }
 
@@ -235,7 +246,10 @@ impl Escrow {
         Self::save_job(&env, job_id, job.clone());
 
         env.events().publish(
-            (soroban_sdk::symbol_short!("escrow"), soroban_sdk::symbol_short!("refunded")),
+            (
+                soroban_sdk::symbol_short!("escrow"),
+                soroban_sdk::symbol_short!("refunded"),
+            ),
             (job_id, requester, job.amount),
         );
     }
@@ -260,7 +274,10 @@ impl Escrow {
         Self::save_job(&env, job_id, job);
 
         env.events().publish(
-            (soroban_sdk::symbol_short!("escrow"), soroban_sdk::symbol_short!("disputed")),
+            (
+                soroban_sdk::symbol_short!("escrow"),
+                soroban_sdk::symbol_short!("disputed"),
+            ),
             (job_id, requester),
         );
     }

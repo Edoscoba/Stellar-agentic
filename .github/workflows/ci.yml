@@ -22,6 +22,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
@@ -38,8 +39,7 @@ jobs:
         run: cargo test --all
 
       - name: Build WASM
-        run: |
-          cargo build --target wasm32-unknown-unknown --release
+        run: cargo build --target wasm32-unknown-unknown --release
 
   # ── TypeScript SDK ────────────────────────────────────────────────────────
   sdk:
@@ -52,51 +52,59 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: latest
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: sdk/package-lock.json
+          cache: 'pnpm'
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
+        working-directory: .
 
       - name: Type check
-        run: npm run typecheck
+        run: pnpm --filter @stellaragent/sdk typecheck
 
       - name: Run tests
-        run: npm test
+        run: pnpm --filter @stellaragent/sdk test
 
       - name: Build
-        run: npm run build
+        run: pnpm --filter @stellaragent/sdk build
 
   # ── Dashboard ─────────────────────────────────────────────────────────────
   dashboard:
     name: Dashboard (React)
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: dashboard
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: latest
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: dashboard/package-lock.json
+          cache: 'pnpm'
+          cache-dependency-path: pnpm-lock.yaml
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Type check
-        run: npm run typecheck
+        run: pnpm --filter @stellaragent/dashboard typecheck
 
       - name: Lint
-        run: npm run lint
+        run: pnpm --filter @stellaragent/dashboard lint
 
       - name: Build
-        run: npm run build
+        run: pnpm --filter @stellaragent/dashboard build

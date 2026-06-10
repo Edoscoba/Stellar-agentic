@@ -1,9 +1,6 @@
 #![no_std]
 
-use soroban_sdk::{
-    contract, contractimpl, contracttype,
-    token, Address, Env, Map,
-};
+use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, Map};
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -124,7 +121,10 @@ impl PaymentChannel {
             .set(&soroban_sdk::symbol_short!("channels"), &channels);
 
         env.events().publish(
-            (soroban_sdk::symbol_short!("channel"), soroban_sdk::symbol_short!("opened")),
+            (
+                soroban_sdk::symbol_short!("channel"),
+                soroban_sdk::symbol_short!("opened"),
+            ),
             (channel_id, agent, owner, deposit),
         );
 
@@ -196,7 +196,10 @@ impl PaymentChannel {
 
         // Emit payment event (audit trail)
         env.events().publish(
-            (soroban_sdk::symbol_short!("channel"), soroban_sdk::symbol_short!("paid")),
+            (
+                soroban_sdk::symbol_short!("channel"),
+                soroban_sdk::symbol_short!("paid"),
+            ),
             (channel_id, agent, recipient, amount, memo),
         );
     }
@@ -221,7 +224,10 @@ impl PaymentChannel {
         token_client.transfer(&owner, &env.current_contract_address(), &amount);
 
         env.events().publish(
-            (soroban_sdk::symbol_short!("channel"), soroban_sdk::symbol_short!("topup")),
+            (
+                soroban_sdk::symbol_short!("channel"),
+                soroban_sdk::symbol_short!("topup"),
+            ),
             (channel_id, owner, amount),
         );
     }
@@ -249,7 +255,10 @@ impl PaymentChannel {
             .set(&soroban_sdk::symbol_short!("channels"), &channels);
 
         env.events().publish(
-            (soroban_sdk::symbol_short!("channel"), soroban_sdk::symbol_short!("closed")),
+            (
+                soroban_sdk::symbol_short!("channel"),
+                soroban_sdk::symbol_short!("closed"),
+            ),
             (channel_id, owner),
         );
     }
@@ -288,7 +297,7 @@ impl PaymentChannel {
     fn ledgers_per_period(period: &SpendPeriod) -> u32 {
         match period {
             SpendPeriod::PerLedger => 1,
-            SpendPeriod::Hourly => 720,   // ~5s ledgers
+            SpendPeriod::Hourly => 720, // ~5s ledgers
             SpendPeriod::Daily => 17_280,
         }
     }
