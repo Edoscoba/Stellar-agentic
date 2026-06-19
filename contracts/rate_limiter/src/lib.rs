@@ -144,7 +144,10 @@ impl RateLimiter {
         Self::save_limit(&env, &agent, limit);
 
         env.events().publish(
-            (soroban_sdk::symbol_short!("rl"), soroban_sdk::symbol_short!("recorded")),
+            (
+                soroban_sdk::symbol_short!("rl"),
+                soroban_sdk::symbol_short!("recorded"),
+            ),
             (agent, amount),
         );
     }
@@ -189,7 +192,10 @@ impl RateLimiter {
         Self::save_limit(&env, &agent, limit);
 
         env.events().publish(
-            (soroban_sdk::symbol_short!("rl"), soroban_sdk::symbol_short!("killed")),
+            (
+                soroban_sdk::symbol_short!("rl"),
+                soroban_sdk::symbol_short!("killed"),
+            ),
             agent,
         );
     }

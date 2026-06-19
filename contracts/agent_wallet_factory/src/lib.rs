@@ -1,8 +1,7 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short,
-    Address, Env, Map, String, Vec,
+    contract, contractimpl, contracttype, symbol_short, Address, Env, Map, String, Vec,
 };
 
 // ─── Storage Keys ────────────────────────────────────────────────────────────
@@ -54,12 +53,16 @@ impl AgentWalletFactory {
         if env.storage().instance().has(&symbol_short!("admin")) {
             panic!("already initialized");
         }
-        env.storage().instance().set(&symbol_short!("admin"), &admin);
+        env.storage()
+            .instance()
+            .set(&symbol_short!("admin"), &admin);
         env.storage().instance().set(&symbol_short!("count"), &0u64);
 
         // Initialize empty agents map
         let agents: Map<u64, AgentInfo> = Map::new(&env);
-        env.storage().instance().set(&symbol_short!("agents"), &agents);
+        env.storage()
+            .instance()
+            .set(&symbol_short!("agents"), &agents);
     }
 
     // ── Agent Management ─────────────────────────────────────────────────────
@@ -74,12 +77,7 @@ impl AgentWalletFactory {
     ///
     /// # Returns
     /// The agent ID (incrementing counter)
-    pub fn create_agent(
-        env: Env,
-        owner: Address,
-        agent_address: Address,
-        name: String,
-    ) -> u64 {
+    pub fn create_agent(env: Env, owner: Address, agent_address: Address, name: String) -> u64 {
         // Require the owner to authorize this call
         owner.require_auth();
 
@@ -110,8 +108,12 @@ impl AgentWalletFactory {
 
         agents.set(agent_id, agent);
 
-        env.storage().instance().set(&symbol_short!("agents"), &agents);
-        env.storage().instance().set(&symbol_short!("count"), &agent_id);
+        env.storage()
+            .instance()
+            .set(&symbol_short!("agents"), &agents);
+        env.storage()
+            .instance()
+            .set(&symbol_short!("count"), &agent_id);
 
         // Emit creation event
         env.events().publish(
@@ -140,7 +142,9 @@ impl AgentWalletFactory {
 
         agent.active = false;
         agents.set(agent_id, agent.clone());
-        env.storage().instance().set(&symbol_short!("agents"), &agents);
+        env.storage()
+            .instance()
+            .set(&symbol_short!("agents"), &agents);
 
         env.events().publish(
             (symbol_short!("factory"), symbol_short!("deactiv")),
@@ -166,7 +170,9 @@ impl AgentWalletFactory {
 
         agent.active = true;
         agents.set(agent_id, agent);
-        env.storage().instance().set(&symbol_short!("agents"), &agents);
+        env.storage()
+            .instance()
+            .set(&symbol_short!("agents"), &agents);
 
         env.events().publish(
             (symbol_short!("factory"), symbol_short!("reactiv")),
@@ -186,7 +192,9 @@ impl AgentWalletFactory {
         let mut agent = agents.get(agent_id).expect("agent not found");
         agent.total_ops += 1;
         agents.set(agent_id, agent);
-        env.storage().instance().set(&symbol_short!("agents"), &agents);
+        env.storage()
+            .instance()
+            .set(&symbol_short!("agents"), &agents);
     }
 
     // ── Queries ──────────────────────────────────────────────────────────────
@@ -304,11 +312,7 @@ mod tests {
 
         client.initialize(&admin);
 
-        let agent_id = client.create_agent(
-            &owner,
-            &agent_addr,
-            &String::from_str(&env, "MyAgent"),
-        );
+        let agent_id = client.create_agent(&owner, &agent_addr, &String::from_str(&env, "MyAgent"));
 
         assert_eq!(agent_id, 1);
         assert_eq!(client.total_agents(), 1);
@@ -328,11 +332,8 @@ mod tests {
         let agent_addr = Address::generate(&env);
 
         client.initialize(&admin);
-        let agent_id = client.create_agent(
-            &owner,
-            &agent_addr,
-            &String::from_str(&env, "TestAgent"),
-        );
+        let agent_id =
+            client.create_agent(&owner, &agent_addr, &String::from_str(&env, "TestAgent"));
 
         client.deactivate_agent(&owner, &agent_id);
         assert!(!client.get_agent(&agent_id).active);
