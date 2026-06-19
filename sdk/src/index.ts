@@ -21,9 +21,9 @@ import type {
   JobInfo,
   TxResult,
   ContractAddresses,
-} from '../types/index.js';
+} from './types/index.js';
 
-import { NETWORK_CONFIGS } from '../types/index.js';
+import { NETWORK_CONFIGS } from './types/index.js';
 
 // ─── Default Testnet Contract Addresses ──────────────────────────────────────
 // TODO: Update these after deploying contracts to testnet
