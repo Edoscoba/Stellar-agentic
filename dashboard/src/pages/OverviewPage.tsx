@@ -20,6 +20,7 @@ import {
   ProgressBar,
 } from '../components/ui/index.js';
 import { MOCK_AGENTS, MOCK_PAYMENTS, MOCK_SPEND_DATA } from '../lib/mockData.js';
+import { sumAmounts, fmt, pctNumber } from '../lib/deterministic-math.js';
 
 // ─── Custom Tooltip ───────────────────────────────────────────────────────────
 
@@ -39,10 +40,8 @@ function CustomTooltip({ active, payload, label }: any) {
 export function OverviewPage() {
   const activeAgents = MOCK_AGENTS.filter((a) => a.status === 'active').length;
   const warningAgents = MOCK_AGENTS.filter((a) => a.status === 'warning').length;
-  const totalSpentToday = MOCK_AGENTS.reduce(
-    (sum, a) => sum + parseFloat(a.spentToday),
-    0,
-  ).toFixed(2);
+  // Deterministic sum: use bignumber.js so the result is identical on ARM and x86
+  const totalSpentToday = fmt(sumAmounts(MOCK_AGENTS.map((a) => a.spentToday)), 2);
   const totalOps = MOCK_AGENTS.reduce((sum, a) => sum + a.totalOps, 0).toLocaleString();
 
   return (
@@ -202,8 +201,8 @@ export function OverviewPage() {
                     </div>
                     <div className="mt-2">
                       <ProgressBar
-                        value={parseFloat(agent.spentToday)}
-                        max={parseFloat(agent.limitPerDay)}
+                        value={pctNumber(agent.spentToday, agent.limitPerDay)}
+                        max={100}
                         showPercent
                         danger={agent.status === 'warning'}
                       />

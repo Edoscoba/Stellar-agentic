@@ -8,6 +8,42 @@ import {
   Horizon,
 } from '@stellar/stellar-sdk';
 
+// ─── Deterministic math (re-exported for consumers) ──────────────────────────
+export * as math from './math/index.js';
+export {
+  // fixed-point primitives
+  bn,
+  add,
+  sub,
+  mul,
+  div,
+  pct,
+  clamp,
+  sumStrings,
+  toStroops,
+  fromStroops,
+  fmt,
+  toStr,
+  gt, gte, lt, lte, eq,
+  isZero,
+  isPositive,
+  STROOP_SCALE,
+  BPS_SCALE,
+  BigNumber,
+  // bidding algorithm
+  scoreBid,
+  rankBids,
+  selectBestBid,
+  isWithinSpendLimit,
+  remainingBudget,
+  DEFAULT_BID_WEIGHTS,
+} from './math/index.js';
+export type {
+  AgentBid,
+  BidWeights,
+  ScoredBid,
+} from './math/bid.js';
+
 import type {
   StellarAgentConfig,
   Network,

@@ -2,6 +2,7 @@ import { motion } from 'framer-motion';
 import { ArrowUpRight, CheckCircle2, XCircle, Clock } from 'lucide-react';
 import { Badge, AddressChip, SectionHeader, Card } from '../components/ui/index.js';
 import { MOCK_PAYMENTS } from '../lib/mockData.js';
+import { sumAmounts, fmt } from '../lib/deterministic-math.js';
 
 function statusIcon(status: string) {
   if (status === 'success') return <CheckCircle2 size={14} className="text-sa-green" />;
@@ -18,10 +19,11 @@ function statusBadge(status: string) {
 export function PaymentsPage() {
   const totalSuccess = MOCK_PAYMENTS.filter((p) => p.status === 'success').length;
   const totalFailed = MOCK_PAYMENTS.filter((p) => p.status === 'failed').length;
-  const totalVolume = MOCK_PAYMENTS
-    .filter((p) => p.status === 'success')
-    .reduce((sum, p) => sum + parseFloat(p.amount), 0)
-    .toFixed(4);
+  // Deterministic sum: use bignumber.js to avoid float drift between ARM and x86
+  const totalVolume = fmt(
+    sumAmounts(MOCK_PAYMENTS.filter((p) => p.status === 'success').map((p) => p.amount)),
+    4,
+  );
 
   return (
     <div className="flex-1 overflow-auto">
