@@ -11,10 +11,12 @@ import {
   ProgressBar,
 } from '../components/ui/index.js';
 import { MOCK_AGENTS, type Agent } from '../lib/mockData.js';
+import { pctNumber } from '../lib/deterministic-math.js';
 
 function AgentCard({ agent, onSelect }: { agent: Agent; onSelect: (a: Agent) => void }) {
-  const hourPct = (parseFloat(agent.spentThisHour) / parseFloat(agent.limitPerHour)) * 100;
-  const dayPct = (parseFloat(agent.spentToday) / parseFloat(agent.limitPerDay)) * 100;
+  // Deterministic percentage calculation — bignumber.js, not native float division
+  const hourPct = pctNumber(agent.spentThisHour, agent.limitPerHour);
+  const dayPct = pctNumber(agent.spentToday, agent.limitPerDay);
 
   return (
     <motion.div
@@ -67,15 +69,15 @@ function AgentCard({ agent, onSelect }: { agent: Agent; onSelect: (a: Agent) => 
       {/* Spend limits */}
       <div className="space-y-2.5">
         <ProgressBar
-          value={parseFloat(agent.spentThisHour)}
-          max={parseFloat(agent.limitPerHour)}
+          value={hourPct}
+          max={100}
           label={`Hourly: $${agent.spentThisHour} / $${agent.limitPerHour}`}
           showPercent
           danger={hourPct > 80}
         />
         <ProgressBar
-          value={parseFloat(agent.spentToday)}
-          max={parseFloat(agent.limitPerDay)}
+          value={dayPct}
+          max={100}
           label={`Daily: $${agent.spentToday} / $${agent.limitPerDay}`}
           showPercent
           danger={dayPct > 80}

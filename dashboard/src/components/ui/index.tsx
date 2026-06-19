@@ -1,6 +1,7 @@
 import { motion } from 'framer-motion';
 import { clsx } from 'clsx';
 import type { ReactNode } from 'react';
+import { pctNumber, clamp100 } from '../../lib/deterministic-math.js';
 
 // ─── Badge ────────────────────────────────────────────────────────────────────
 
@@ -190,7 +191,13 @@ interface ProgressBarProps {
 }
 
 export function ProgressBar({ value, max = 100, label, showPercent, danger }: ProgressBarProps) {
-  const pct = Math.min((value / max) * 100, 100);
+  // Compute percentage deterministically.
+  // When callers already pre-compute a 0–100 value via pctNumber() and pass max=100,
+  // this is a simple clamp. When max != 100 (legacy or chart use), we do the
+  // deterministic division via pctNumber on string representations.
+  const pct = max === 100
+    ? clamp100(value)
+    : clamp100(pctNumber(String(value), String(max)));
   const isHigh = pct > 80;
 
   return (
