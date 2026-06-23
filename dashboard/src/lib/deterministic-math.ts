@@ -5,7 +5,7 @@
  * on monetary values or on any derived number that could be compared or hashed
  * on-chain.  Results are identical on x86 and ARM (M1/M2).
  *
- * Mirrors the API surface of `@stellaragent/sdk/math` so call sites are
+ * Mirrors the API surface of `@stellaragent/core/math` so call sites are
  * consistent across the repo.
  */
 
