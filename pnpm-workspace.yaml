@@ -1,3 +1,5 @@
 packages:
-  - sdk
+  - 'packages/*'
   - dashboard
+allowBuilds:
+  esbuild: true

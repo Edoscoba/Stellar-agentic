@@ -6,7 +6,7 @@
  *
  * @example
  * ```typescript
- * import { rankBids, fmt, toStroops } from '@stellaragent/sdk/math';
+ * import { rankBids, fmt, toStroops } from '@stellaragent/core/math';
  * ```
  */
 
