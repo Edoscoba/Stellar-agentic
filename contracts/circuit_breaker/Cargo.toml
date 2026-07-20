@@ -1,5 +1,5 @@
 [package]
-name = "payment_channel"
+name = "circuit_breaker"
 version = "0.1.0"
 edition = "2021"
 
@@ -11,3 +11,5 @@ soroban-sdk = { workspace = true }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
+payment_channel = { path = "../payment_channel" }
+escrow = { path = "../escrow" }

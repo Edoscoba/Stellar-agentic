@@ -4,11 +4,12 @@ members = [
     "payment_channel",
     "escrow",
     "rate_limiter",
+    "circuit_breaker",
 ]
 resolver = "2"
 
 [workspace.dependencies]
-soroban-sdk = { version = "22.0.0", features = ["testutils"] }
+soroban-sdk = { version = "22.0.0" }
 
 [profile.release]
 opt-level = "z"

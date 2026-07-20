@@ -61,6 +61,10 @@ import type {
 
 import { NETWORK_CONFIGS } from './types/index.js';
 
+// ─── Circuit Breaker (emergency pause) ────────────────────────────────────────
+export { CircuitBreaker } from './circuitBreaker.js';
+export type { CircuitBreakerOptions } from './circuitBreaker.js';
+
 // ─── Default Testnet Contract Addresses ──────────────────────────────────────
 // TODO: Update these after deploying contracts to testnet
 
@@ -70,18 +74,21 @@ const DEFAULT_CONTRACTS: Record<Network, ContractAddresses> = {
     paymentChannel: 'CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',
     escrow: 'CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC',
     rateLimiter: 'CDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD',
+    circuitBreaker: 'CEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE',
   },
   mainnet: {
     agentWalletFactory: '',
     paymentChannel: '',
     escrow: '',
     rateLimiter: '',
+    circuitBreaker: '',
   },
   local: {
     agentWalletFactory: '',
     paymentChannel: '',
     escrow: '',
     rateLimiter: '',
+    circuitBreaker: '',
   },
 };
 

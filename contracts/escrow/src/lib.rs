@@ -11,7 +11,10 @@
 //! 4. Agent A (or arbiter) calls `release` — funds go to Agent B
 //! 5. If Agent B doesn't deliver, Agent A calls `refund` after deadline
 
-use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Bytes, Env, Map};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, symbol_short, token, Address, Bytes, Env, Map, Symbol,
+    Vec,
+};
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -179,6 +182,8 @@ impl Escrow {
 
     /// Requester (or arbiter) releases payment to the worker
     pub fn release(env: Env, releaser: Address, job_id: u64) {
+        Self::require_not_paused(&env);
+
         releaser.require_auth();
 
         let mut job = Self::load_job(&env, job_id);
@@ -282,6 +287,28 @@ impl Escrow {
         );
     }
 
+    /// Wire this escrow contract up to a deployed CircuitBreaker contract.
+    /// The first caller to set it becomes the admin for future rotations.
+    pub fn set_circuit_breaker(env: Env, admin: Address, circuit_breaker: Address) {
+        admin.require_auth();
+
+        let admin_key = symbol_short!("cb_admin");
+        match env.storage().instance().get::<_, Address>(&admin_key) {
+            Some(stored_admin) => {
+                if stored_admin != admin {
+                    panic!("not the circuit breaker admin");
+                }
+            }
+            None => {
+                env.storage().instance().set(&admin_key, &admin);
+            }
+        }
+
+        env.storage()
+            .instance()
+            .set(&symbol_short!("cb"), &circuit_breaker);
+    }
+
     // ── Queries ──────────────────────────────────────────────────────────────
 
     pub fn get_job(env: Env, job_id: u64) -> Job {
@@ -317,6 +344,23 @@ impl Escrow {
             .get(&soroban_sdk::symbol_short!("jobs"))
             .unwrap_or(Map::new(env));
         jobs.get(job_id).expect("job not found")
+    }
+
+    /// Panics if a CircuitBreaker is configured and reports the system as
+    /// paused. If no CircuitBreaker has been wired up via
+    /// `set_circuit_breaker`, this is a no-op (fail-open before setup).
+    fn require_not_paused(env: &Env) {
+        let cb: Option<Address> = env.storage().instance().get(&symbol_short!("cb"));
+        if let Some(circuit_breaker) = cb {
+            let is_paused: bool = env.invoke_contract(
+                &circuit_breaker,
+                &Symbol::new(env, "is_paused"),
+                Vec::new(env),
+            );
+            if is_paused {
+                panic!("system paused");
+            }
+        }
     }
 
     fn save_job(env: &Env, job_id: u64, job: Job) {
