@@ -1,6 +1,8 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, Map};
+use soroban_sdk::{
+    contract, contractimpl, contracttype, symbol_short, token, Address, Env, Map, Symbol, Vec,
+};
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -148,6 +150,8 @@ impl PaymentChannel {
         amount: i128,
         memo: soroban_sdk::Bytes,
     ) {
+        Self::require_not_paused(&env);
+
         agent.require_auth();
 
         let mut channels: Map<u64, Channel> = env
@@ -263,6 +267,28 @@ impl PaymentChannel {
         );
     }
 
+    /// Wire this channel contract up to a deployed CircuitBreaker contract.
+    /// The first caller to set it becomes the admin for future rotations.
+    pub fn set_circuit_breaker(env: Env, admin: Address, circuit_breaker: Address) {
+        admin.require_auth();
+
+        let admin_key = symbol_short!("cb_admin");
+        match env.storage().instance().get::<_, Address>(&admin_key) {
+            Some(stored_admin) => {
+                if stored_admin != admin {
+                    panic!("not the circuit breaker admin");
+                }
+            }
+            None => {
+                env.storage().instance().set(&admin_key, &admin);
+            }
+        }
+
+        env.storage()
+            .instance()
+            .set(&symbol_short!("cb"), &circuit_breaker);
+    }
+
     // ── Queries ──────────────────────────────────────────────────────────────
 
     pub fn get_channel(env: Env, channel_id: u64) -> Channel {
@@ -292,6 +318,23 @@ impl PaymentChannel {
             .instance()
             .set(&soroban_sdk::symbol_short!("count"), &next);
         next
+    }
+
+    /// Panics if a CircuitBreaker is configured and reports the system as
+    /// paused. If no CircuitBreaker has been wired up via
+    /// `set_circuit_breaker`, this is a no-op (fail-open before setup).
+    fn require_not_paused(env: &Env) {
+        let cb: Option<Address> = env.storage().instance().get(&symbol_short!("cb"));
+        if let Some(circuit_breaker) = cb {
+            let is_paused: bool = env.invoke_contract(
+                &circuit_breaker,
+                &Symbol::new(env, "is_paused"),
+                Vec::new(env),
+            );
+            if is_paused {
+                panic!("system paused");
+            }
+        }
     }
 
     fn ledgers_per_period(period: &SpendPeriod) -> u32 {
