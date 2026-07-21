@@ -1,6 +1,10 @@
 #![no_std]
 
-use soroban_sdk::{contract, contractimpl, contracttype, token, Address, Env, Map};
+use soroban_sdk::{
+    contract, contractimpl, contracttype,
+    crypto::bls12_381::{Fr, G1Affine, G2Affine},
+    symbol_short, token, Address, Env, Map, Vec, U256,
+};
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -50,6 +54,32 @@ pub struct PaymentRecord {
     pub token: Address,
     pub ledger: u32,
     pub memo: soroban_sdk::Bytes,
+}
+
+/// A Groth16 verifying key for the solvency circuit (see
+/// `zk/solvency_proof`), encoded as native BLS12-381 points so it can be
+/// checked on-chain via `env.crypto().bls12_381().pairing_check`.
+///
+/// `gamma_abc_g1` must have exactly 3 entries: the constant term followed
+/// by one entry per public input (`limit_per_period`, `total_spent`, in
+/// that order), per the circuit's declared public inputs.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SolvencyVerifyingKey {
+    pub alpha_g1: G1Affine,
+    pub beta_g2: G2Affine,
+    pub gamma_g2: G2Affine,
+    pub delta_g2: G2Affine,
+    pub gamma_abc_g1: Vec<G1Affine>,
+}
+
+/// A Groth16 proof for the solvency circuit.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct SolvencyProof {
+    pub a: G1Affine,
+    pub b: G2Affine,
+    pub c: G1Affine,
 }
 
 // ─── Contract ────────────────────────────────────────────────────────────────
@@ -277,6 +307,78 @@ impl PaymentChannel {
     pub fn remaining_this_period(env: Env, channel_id: u64) -> i128 {
         let channel = Self::get_channel(env, channel_id);
         channel.limit_per_period - channel.spent_this_period
+    }
+
+    // ── Solvency proofs (ZK) ─────────────────────────────────────────────────
+
+    /// Admin-only: install (or rotate) the Groth16 verifying key used by
+    /// `verify_solvency_proof`. The first caller to set it becomes the
+    /// admin for future rotations, mirroring `set_circuit_breaker`.
+    pub fn set_solvency_vk(env: Env, admin: Address, vk: SolvencyVerifyingKey) {
+        admin.require_auth();
+
+        if vk.gamma_abc_g1.len() != 3 {
+            panic!("solvency vk must have exactly 3 gamma_abc_g1 entries");
+        }
+
+        let admin_key = symbol_short!("sv_admin");
+        match env.storage().instance().get::<_, Address>(&admin_key) {
+            Some(stored_admin) => {
+                if stored_admin != admin {
+                    panic!("not the solvency vk admin");
+                }
+            }
+            None => {
+                env.storage().instance().set(&admin_key, &admin);
+            }
+        }
+
+        env.storage().instance().set(&symbol_short!("sv_vk"), &vk);
+    }
+
+    /// Verifies a Groth16 proof that some private payment history is
+    /// consistent with this channel's own public `limit_per_period` and
+    /// `total_spent` — i.e. that some ordering of undisclosed payments into
+    /// spend-limit periods never exceeded the limit, and summed to exactly
+    /// the channel's recorded total. Returns `true`/`false`; never panics
+    /// on a bad proof (only if no verifying key has been configured).
+    ///
+    /// See `zk/solvency_proof` for the prover and `docs/zk-solvency-design.md`
+    /// for the full circuit description.
+    pub fn verify_solvency_proof(env: Env, channel_id: u64, proof: SolvencyProof) -> bool {
+        let channel = Self::get_channel(env.clone(), channel_id);
+        let vk: SolvencyVerifyingKey = env
+            .storage()
+            .instance()
+            .get(&symbol_short!("sv_vk"))
+            .expect("solvency verifying key not set");
+
+        let bls = env.crypto().bls12_381();
+
+        let limit_scalar = Fr::from_u256(U256::from_u128(&env, channel.limit_per_period as u128));
+        let total_scalar = Fr::from_u256(U256::from_u128(&env, channel.total_spent as u128));
+
+        // vk_x = gamma_abc_g1[0] + limit*gamma_abc_g1[1] + total_spent*gamma_abc_g1[2]
+        let public_term = bls.g1_msm(
+            Vec::from_array(
+                &env,
+                [
+                    vk.gamma_abc_g1.get(1).unwrap(),
+                    vk.gamma_abc_g1.get(2).unwrap(),
+                ],
+            ),
+            Vec::from_array(&env, [limit_scalar, total_scalar]),
+        );
+        let vk_x = bls.g1_add(&vk.gamma_abc_g1.get(0).unwrap(), &public_term);
+
+        // Groth16 verification equation, rearranged into Soroban's
+        // product-of-pairings-equals-identity form:
+        //   e(A,B) * e(-vk_x,gamma) * e(-C,delta) * e(-alpha,beta) == 1
+        // which holds iff e(A,B) == e(alpha,beta) * e(vk_x,gamma) * e(C,delta).
+        let g1_points = Vec::from_array(&env, [proof.a, -vk_x, -proof.c, -vk.alpha_g1]);
+        let g2_points = Vec::from_array(&env, [proof.b, vk.gamma_g2, vk.delta_g2, vk.beta_g2]);
+
+        bls.pairing_check(g1_points, g2_points)
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
