@@ -1,6 +1,7 @@
 # Rust
 target/
 Cargo.lock
+test_snapshots/
 
 # Node
 node_modules/

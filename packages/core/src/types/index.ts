@@ -149,6 +149,7 @@ export interface ContractAddresses {
   paymentChannel: string;
   escrow: string;
   rateLimiter: string;
+  circuitBreaker: string;
 }
 
 // ─── Events ──────────────────────────────────────────────────────────────────

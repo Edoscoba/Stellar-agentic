@@ -4,6 +4,7 @@ members = [
     "payment_channel",
     "escrow",
     "rate_limiter",
+    "circuit_breaker",
 ]
 resolver = "2"
 
