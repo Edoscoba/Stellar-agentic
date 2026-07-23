@@ -52,14 +52,40 @@ import type {
   PayForAPIParams,
   RequestWorkParams,
   RateLimitConfig,
+  RateLimitStatus,
   AgentInfo,
   ChannelInfo,
   JobInfo,
+  SpendReport,
   TxResult,
   ContractAddresses,
 } from './types/index.js';
 
 import { NETWORK_CONFIGS } from './types/index.js';
+
+// Public type surface — previously only imported internally, never
+// re-exported, so consumers (e.g. @stellaragent/react) had no way to
+// import these from the package root at all.
+export type {
+  Network,
+  NetworkConfig,
+  SpendPeriod,
+  SpendLimit,
+  StellarAgentConfig,
+  AgentInfo,
+  OpenChannelParams,
+  PayForAPIParams,
+  ChannelInfo,
+  SpendReport,
+  JobStatus,
+  RequestWorkParams,
+  JobInfo,
+  RateLimitConfig,
+  RateLimitStatus,
+  ContractAddresses,
+  AgentEvent,
+  TxResult,
+} from './types/index.js';
 
 // ─── Circuit Breaker (emergency pause) ────────────────────────────────────────
 export { CircuitBreaker } from './circuitBreaker.js';
@@ -321,12 +347,16 @@ export class StellarAgent {
   /**
    * Get spend report for the current period
    */
-  async getSpendReport(): Promise<{
-    spentThisPeriod: string;
-    remainingThisPeriod: string;
-    totalLifetime: string;
-  }> {
+  async getSpendReport(): Promise<SpendReport> {
     // TODO: Query PaymentChannel.remaining_this_period
+    throw new Error('Not yet implemented');
+  }
+
+  /**
+   * Get info about a payment channel
+   */
+  async getChannel(channelId: bigint): Promise<ChannelInfo> {
+    // TODO: Query PaymentChannel.get_channel
     throw new Error('Not yet implemented');
   }
 
@@ -335,6 +365,14 @@ export class StellarAgent {
    */
   async getJob(jobId: bigint): Promise<JobInfo> {
     // TODO: Query Escrow.get_job
+    throw new Error('Not yet implemented');
+  }
+
+  /**
+   * Get current rate-limit usage alongside the configured limits
+   */
+  async getRateLimitStatus(): Promise<RateLimitStatus> {
+    // TODO: Query RateLimiter.get_status
     throw new Error('Not yet implemented');
   }
 

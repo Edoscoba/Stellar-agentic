@@ -120,6 +120,12 @@ export interface ChannelInfo {
   active: boolean;
 }
 
+export interface SpendReport {
+  spentThisPeriod: string;
+  remainingThisPeriod: string;
+  totalLifetime: string;
+}
+
 // ─── Escrow / Jobs ───────────────────────────────────────────────────────────
 
 export type JobStatus =
@@ -166,6 +172,16 @@ export interface RateLimitConfig {
   maxPerHour: string;
   maxPerDay: string;
   maxTxsPerHour: number;
+}
+
+/** Current rate-limit usage alongside the configured limits, for `RateLimiter`. */
+export interface RateLimitStatus extends RateLimitConfig {
+  /** Amount spent in the current rolling hour */
+  spentThisHour: string;
+  /** Amount spent in the current rolling day */
+  spentToday: string;
+  /** Transaction count in the current rolling hour */
+  txsThisHour: number;
 }
 
 // ─── Contracts ───────────────────────────────────────────────────────────────
