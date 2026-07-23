@@ -5,6 +5,8 @@ members = [
     "escrow",
     "rate_limiter",
     "circuit_breaker",
+    "price_oracle",
+    "amm_swap",
 ]
 resolver = "2"
 

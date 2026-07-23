@@ -63,11 +63,18 @@ export interface AgentInfo {
 // ─── Payment Channel ─────────────────────────────────────────────────────────
 
 export interface OpenChannelParams {
-  /** Token to use for payments (defaults to USDC) */
+  /**
+   * Token to use for payments (defaults to USDC). This remains the
+   * channel's single funding/settlement asset — `limitPerPeriod` is always
+   * denominated in it, even for cross-asset payments made via
+   * `payForAPI`'s `destAsset` (see `PayForAPIParams`). Cross-asset support
+   * lets one channel pay recipients in other assets; it does not make the
+   * channel itself multi-asset.
+   */
   token?: string;
   /** Initial deposit amount (as string to avoid precision issues) */
   deposit: string;
-  /** Max spend per period */
+  /** Max spend per period, denominated in `token` */
   limitPerPeriod: string;
   period: SpendPeriod;
 }
@@ -75,12 +82,31 @@ export interface OpenChannelParams {
 export interface PayForAPIParams {
   /** API endpoint being paid for (stored in memo) */
   endpoint: string;
-  /** Amount to pay */
+  /** Amount to pay, denominated in the channel's settlement asset */
   amount: string;
-  /** Asset to pay with */
+  /** Asset to pay with (must match the channel's settlement asset) */
   asset?: string;
   /** Channel ID to use (uses default if not specified) */
   channelId?: bigint;
+  /**
+   * Asset the recipient should actually receive, if different from the
+   * channel's settlement asset (`asset`) — e.g. a channel funded in USDC
+   * paying a provider that only accepts XLM. When set, this routes through
+   * `PaymentChannel.pay_with_conversion` instead of `pay`, converting via
+   * the channel contract's configured price oracle + AMM. The spend limit
+   * is still enforced in the channel's settlement asset regardless of
+   * `destAsset`. Requires `minReceived` to also be set.
+   */
+  destAsset?: string;
+  /**
+   * Minimum amount of `destAsset` the recipient must receive (slippage
+   * floor), as a string in `destAsset` units. Required when `destAsset` is
+   * set. The contract additionally enforces its own oracle-derived
+   * fairness bound on top of this — see
+   * `contracts/payment_channel/src/lib.rs`'s `pay_with_conversion` for the
+   * full slippage/price-oracle design.
+   */
+  minReceived?: string;
 }
 
 export interface ChannelInfo {
