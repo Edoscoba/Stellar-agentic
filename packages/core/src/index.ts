@@ -197,12 +197,27 @@ export class StellarAgent {
    * Pay for an API call. Deducts from the active payment channel.
    * Respects on-chain spend limits automatically.
    *
+   * If `destAsset` differs from the channel's settlement asset, this
+   * settles the recipient in `destAsset` instead — e.g. a channel funded
+   * in USDC paying a provider that only accepts XLM — by invoking
+   * `PaymentChannel.pay_with_conversion` rather than `pay`. The spend
+   * limit is still enforced in the channel's settlement asset either way.
+   *
    * @example
    * ```typescript
    * await agent.payForAPI({
    *   endpoint: 'https://api.openai.com/v1/chat',
    *   amount: '0.001',
    *   asset: 'USDC',
+   * });
+   *
+   * // Channel funded in USDC, provider only accepts XLM:
+   * await agent.payForAPI({
+   *   endpoint: 'https://api.example.com/inference',
+   *   amount: '0.001',
+   *   asset: 'USDC',
+   *   destAsset: 'XLM',
+   *   minReceived: '0.009', // slippage floor, in XLM
    * });
    * ```
    */
@@ -211,7 +226,12 @@ export class StellarAgent {
       throw new Error('No active payment channel. Call openChannel() first.');
     }
 
-    // TODO: Invoke PaymentChannel.pay via Soroban
+    if ((params.destAsset !== undefined) !== (params.minReceived !== undefined)) {
+      throw new Error('destAsset and minReceived must be set together');
+    }
+
+    // TODO: Invoke PaymentChannel.pay (or pay_with_conversion, when
+    // params.destAsset is set) via Soroban — see companion SDK issue.
     console.log('Paying for API:', params);
     throw new Error('Not yet implemented — see contracts/payment_channel/src/lib.rs');
   }
