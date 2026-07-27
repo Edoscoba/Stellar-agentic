@@ -30,13 +30,13 @@ pnpm deploy:contracts --network local --source alice
 
 ## Prerequisites
 
-- [Rust](https://rustup.rs/) with the `wasm32-unknown-unknown` target
+- [Rust](https://rustup.rs/) 1.84+ with the `wasm32v1-none` target
 - [Stellar CLI](https://developers.stellar.org/docs/tools/stellar-cli) v21+
 - Node.js 18+ and pnpm
 - A funded identity on the target network
 
 ```bash
-rustup target add wasm32-unknown-unknown
+rustup target add wasm32v1-none
 stellar keys generate alice --network testnet --fund
 ```
 
@@ -74,6 +74,7 @@ pnpm deploy:contracts \
 | `--trusted-nodes <G,...>` | *(empty)* | Circuit-breaker trusted node set |
 | `--propose-window <n>` | `720` | Circuit-breaker proposal validity window, in ledgers |
 | `--out <path>` | `deployments/<network>.json` | Where to write the config |
+| `--target <triple>` | `wasm32v1-none` if installed | Wasm target to build/deploy |
 | `--skip-build` | off | Reuse existing WASM artifacts |
 | `--dry-run` | off | Print every command without running it |
 
@@ -90,8 +91,16 @@ touching a network.
 ### 1. Build
 
 ```bash
-cargo build --target wasm32-unknown-unknown --release
+cargo build --target wasm32v1-none --release
 ```
+
+**Not `wasm32-unknown-unknown`.** Under Rust ≥ 1.82 that target emits the
+post-MVP `reference-types` wasm feature, which soroban-sdk 22's VM rejects at
+upload time with `reference-types not enabled: zero byte expected`. `cargo
+build` still succeeds, so the artifact looks fine right up until deployment
+fails. `wasm32v1-none` (Rust ≥ 1.84) targets the WebAssembly 1.0 MVP and is
+the correct choice. The script selects it automatically when installed and
+warns when it has to fall back.
 
 ### 2. Deploy all seven contracts
 
@@ -257,8 +266,8 @@ export NET=testnet
 export ADMIN=$(stellar keys public-key $SRC)
 
 cd contracts
-cargo build --target wasm32-unknown-unknown --release
-WASM=target/wasm32-unknown-unknown/release
+cargo build --target wasm32v1-none --release
+WASM=target/wasm32v1-none/release
 
 # ── 1. Deploy all seven ────────────────────────────────────────────────────
 deploy() { stellar contract deploy --wasm $WASM/$1.wasm --source-account $SRC --network $NET; }
@@ -318,9 +327,17 @@ EOF
 in-place upgrade here. A redeploy means new addresses and empty state:
 existing channels, jobs and rate limits do not carry over.
 
-Re-running the script against contracts that are already initialized is safe:
-`initialize` panics with `already initialized`, which the script reports and
-skips rather than aborting mid-sequence.
+Re-running the script therefore does **not** reuse the previous deployment —
+it deploys a fresh set of seven contracts with new IDs and empty state, and
+writes a new config. The previous deployment is left on-chain, orphaned.
+Anything still pointed at the old addresses keeps talking to the old
+contracts.
+
+The script does tolerate an `already initialized` panic and skip past it
+rather than aborting mid-sequence, but note that a normal re-run will not
+trigger that: because every deploy mints new contract IDs, `initialize` is
+always hitting fresh state. That guard only matters if you point the
+initialization steps at contracts deployed some other way.
 
 ### Testnet redeploys in CI
 
@@ -343,7 +360,27 @@ The contract was initialized by an earlier run. Expected on a redeploy; the
 script skips it.
 
 **`WASM not found: …`**
-You passed `--skip-build` without having built. Drop the flag.
+You passed `--skip-build` without having built for the target the script
+selected. Drop the flag, or build that target explicitly.
+
+**`HostError: Error(WasmVm, InvalidAction)` / `reference-types not enabled: zero byte expected`**
+
+The contract was built for `wasm32-unknown-unknown` with Rust ≥ 1.82. That
+target emits the post-MVP `reference-types` feature, which soroban-sdk 22's VM
+rejects at upload. The trap is that **`cargo build` succeeds** — the artifact
+is simply undeployable, so nothing fails until you try to upload it.
+
+```bash
+rustup target add wasm32v1-none
+cd contracts && cargo build --target wasm32v1-none --release
+```
+
+The script picks `wasm32v1-none` automatically when it is installed, and warns
+when falling back. Override with `--target <triple>` if you need to.
+
+Note that `RUSTFLAGS="-C target-feature=-reference-types"` does **not** fix
+this — the feature comes from the precompiled `core`/`std` for that target,
+not from your crate's own codegen.
 
 **`quorum not reached` when pausing**
 Fewer than five distinct trusted nodes have called `propose_pause` inside the

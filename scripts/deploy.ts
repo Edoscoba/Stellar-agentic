@@ -18,7 +18,7 @@
  *
  * ## What it does
  *
- *   1. Builds all WASMs (`cargo build --target wasm32-unknown-unknown --release`)
+ *   1. Builds all WASMs (`cargo build --target wasm32v1-none --release`)
  *   2. Deploys all seven contracts
  *   3. Initializes the four that take an `initialize` entrypoint
  *   4. Cross-wires the references between them
@@ -46,8 +46,53 @@ import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const CONTRACTS_DIR = resolve(REPO_ROOT, 'contracts');
-const WASM_DIR = resolve(CONTRACTS_DIR, 'target/wasm32-unknown-unknown/release');
 const DEPLOYMENTS_DIR = resolve(REPO_ROOT, 'deployments');
+
+/**
+ * Preferred wasm target.
+ *
+ * `wasm32-unknown-unknown` built with Rust >= 1.82 emits the `reference-types`
+ * feature, which soroban-sdk 22's VM rejects at upload time:
+ *
+ *     HostError: Error(WasmVm, InvalidAction)
+ *     "reference-types not enabled: zero byte expected"
+ *
+ * The failure is silent until deploy — `cargo build` succeeds and produces a
+ * .wasm that simply cannot be uploaded. `wasm32v1-none` (Rust >= 1.84) targets
+ * the WebAssembly 1.0 MVP and emits none of those post-MVP features, so it is
+ * the correct target for Soroban on any modern toolchain.
+ *
+ * `-C target-feature=-reference-types` on the old target does *not* fix this:
+ * the feature comes from precompiled `core`/`std`, not from the crate build.
+ */
+const PREFERRED_TARGET = 'wasm32v1-none';
+const LEGACY_TARGET = 'wasm32-unknown-unknown';
+
+/** The installed target to build with, preferring the MVP-clean one. */
+function resolveWasmTarget(): string {
+  if (DRY_RUN) return PREFERRED_TARGET;
+  let installed = '';
+  try {
+    installed = execFileSync('rustup', ['target', 'list', '--installed'], { encoding: 'utf8' });
+  } catch {
+    // No rustup (a plain cargo install, or a distro toolchain). Assume the
+    // preferred target and let cargo report it if missing.
+    return PREFERRED_TARGET;
+  }
+  if (installed.includes(PREFERRED_TARGET)) return PREFERRED_TARGET;
+
+  console.warn(
+    `  ! ${PREFERRED_TARGET} is not installed; falling back to ${LEGACY_TARGET}.\n` +
+    `    On Rust >= 1.82 that target emits reference-types, which the Soroban VM\n` +
+    `    rejects at upload with "reference-types not enabled". If deployment fails\n` +
+    `    that way, run:  rustup target add ${PREFERRED_TARGET}`,
+  );
+  return LEGACY_TARGET;
+}
+
+function wasmDir(target: string): string {
+  return resolve(CONTRACTS_DIR, `target/${target}/release`);
+}
 
 // ─── Contract inventory ──────────────────────────────────────────────────────
 
@@ -87,6 +132,8 @@ interface Options {
   trustedNodes: string[];
   proposeWindow: number;
   out?: string;
+  /** Override the wasm target; defaults to `resolveWasmTarget()`. */
+  target?: string;
   skipBuild: boolean;
   dryRun: boolean;
 }
@@ -115,6 +162,7 @@ function parseArgs(argv: string[]): Options {
       case '--trusted-nodes': opts.trustedNodes = next().split(',').map((s) => s.trim()).filter(Boolean); break;
       case '--propose-window': opts.proposeWindow = Number(next()); break;
       case '--out': opts.out = next(); break;
+      case '--target': opts.target = next(); break;
       case '--skip-build': opts.skipBuild = true; break;
       case '--dry-run': opts.dryRun = true; break;
       case '--help': case '-h': usage(); process.exit(0); break;
@@ -139,6 +187,7 @@ Deploy and wire all StellarAgent Soroban contracts.
   --trusted-nodes <G,...>   Circuit-breaker trusted nodes (comma-separated)
   --propose-window <n>      Circuit-breaker proposal window in ledgers (default: ${DEFAULT_PROPOSE_WINDOW_LEDGERS})
   --out <path>              Output file (default: deployments/<network>.json)
+  --target <triple>         Wasm target (default: ${PREFERRED_TARGET}, else ${LEGACY_TARGET})
   --skip-build              Reuse existing WASM artifacts
   --dry-run                 Print every command without executing it
   -h, --help                Show this message
@@ -169,10 +218,15 @@ function run(cmd: string, args: string[], cwd = REPO_ROOT): string {
 /**
  * Run a contract invocation that is safe to repeat.
  *
- * `initialize` panics with "already initialized" on a redeploy against
- * existing state. That is a successful outcome for this script's purposes —
- * the contract is in the state we want — so it is reported and swallowed
- * rather than aborting a nine-step deployment at step four.
+ * `initialize` panics with "already initialized" when the contract already
+ * holds state. That is a successful outcome for this script's purposes — the
+ * contract is in the state we want — so it is reported and swallowed rather
+ * than aborting a nine-step deployment at step four.
+ *
+ * Note this does not fire on an ordinary re-run: `stellar contract deploy`
+ * mints a new contract ID every time, so `initialize` always meets fresh
+ * state. It matters only when the initialization steps are pointed at
+ * contracts deployed some other way.
  */
 function runIdempotent(cmd: string, args: string[], label: string): boolean {
   console.log(`  $ ${cmd} ${args.join(' ')}`);
@@ -198,16 +252,21 @@ function heading(step: number, total: number, title: string): void {
 
 // ─── Steps ───────────────────────────────────────────────────────────────────
 
-function buildWasms(): void {
-  run('cargo', ['build', '--target', 'wasm32-unknown-unknown', '--release'], CONTRACTS_DIR);
+function buildWasms(target: string): void {
+  run('cargo', ['build', '--target', target, '--release'], CONTRACTS_DIR);
 }
 
-function deployAll(opts: Options): Addresses {
+function deployAll(opts: Options, target: string): Addresses {
   const addresses = {} as Addresses;
+  const dir = wasmDir(target);
   for (const { crate } of CONTRACTS) {
-    const wasm = resolve(WASM_DIR, `${crate}.wasm`);
+    const wasm = resolve(dir, `${crate}.wasm`);
     if (!DRY_RUN && !existsSync(wasm)) {
-      fail(`WASM not found: ${wasm}\n         Run without --skip-build, or build the contracts first.`);
+      fail(
+        `WASM not found: ${wasm}\n` +
+        `         Run without --skip-build, or build for this target first:\n` +
+        `           cd contracts && cargo build --target ${target} --release`,
+      );
     }
     const id = run('stellar', [
       'contract', 'deploy',
@@ -290,10 +349,17 @@ interface Deployment {
   contracts: Record<string, string>;
   /** Every deployed contract keyed by crate name, including the unmapped ones. */
   crates: Record<string, string>;
+  /** Wasm target the deployed artifacts were built for. */
+  wasmTarget: string;
   circuitBreaker: { trustedNodes: string[]; proposeWindowLedgers: number };
 }
 
-function buildDeployment(opts: Options, addr: Addresses, admin: string): Deployment {
+function buildDeployment(
+  opts: Options,
+  addr: Addresses,
+  admin: string,
+  target: string,
+): Deployment {
   const contracts: Record<string, string> = {};
   for (const { crate, sdkKey } of CONTRACTS) {
     if (sdkKey) contracts[sdkKey] = addr[crate];
@@ -304,6 +370,7 @@ function buildDeployment(opts: Options, addr: Addresses, admin: string): Deploym
     deployedAt: new Date().toISOString(),
     contracts,
     crates: Object.fromEntries(CONTRACTS.map(({ crate }) => [crate, addr[crate]])),
+    wasmTarget: target,
     circuitBreaker: {
       trustedNodes: opts.trustedNodes,
       proposeWindowLedgers: opts.proposeWindow,
@@ -349,15 +416,17 @@ function main(): void {
   console.log(`\nDeploying StellarAgent contracts to "${opts.network}"`);
   if (DRY_RUN) console.log('(dry run — no commands will be executed)');
 
+  const target = opts.target ?? resolveWasmTarget();
+
   if (!opts.skipBuild) {
-    heading(++step, totalSteps, 'Building contract WASMs');
-    buildWasms();
+    heading(++step, totalSteps, `Building contract WASMs (${target})`);
+    buildWasms(target);
   } else {
-    console.log('\n  (skipping build, reusing existing WASM artifacts)');
+    console.log(`\n  (skipping build, reusing existing ${target} artifacts)`);
   }
 
   heading(++step, totalSteps, `Deploying ${CONTRACTS.length} contracts`);
-  const addresses = deployAll(opts);
+  const addresses = deployAll(opts, target);
 
   // The admin defaults to whatever `--source` resolves to, so the account
   // paying for the deployment is the one that can administer the result.
@@ -371,7 +440,7 @@ function main(): void {
   wireAll(opts, addresses, admin);
 
   heading(++step, totalSteps, 'Writing deployment config');
-  const deployment = buildDeployment(opts, addresses, admin);
+  const deployment = buildDeployment(opts, addresses, admin, target);
   const outPath = writeDeployment(opts, deployment);
   console.log(`  → ${outPath}`);
   printEnvBlock(deployment);

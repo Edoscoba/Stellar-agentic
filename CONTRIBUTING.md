@@ -43,7 +43,7 @@ commands from the repo root, not from inside a package.
 
 ### Prerequisites
 
-- [Rust](https://rustup.rs/) + `wasm32-unknown-unknown` target
+- [Rust](https://rustup.rs/) 1.84+ with the `wasm32v1-none` target
 - [Stellar CLI](https://developers.stellar.org/docs/tools/stellar-cli)
 - Node.js 18+
 - Git
@@ -56,7 +56,7 @@ git clone https://github.com/yourusername/stellaragent.git
 cd stellaragent
 
 # Install Rust wasm target
-rustup target add wasm32-unknown-unknown
+rustup target add wasm32v1-none
 
 # Install every workspace package in one shot (pnpm, from the repo root)
 pnpm install

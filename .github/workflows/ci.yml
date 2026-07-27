@@ -25,7 +25,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: wasm32-unknown-unknown
+          targets: wasm32v1-none, wasm32-unknown-unknown
           components: rustfmt, clippy
 
       - name: Cache Rust
@@ -42,8 +42,13 @@ jobs:
       - name: Run tests
         run: cargo test --all
 
-      - name: Build WASM
-        run: cargo build --target wasm32-unknown-unknown --release
+      # wasm32v1-none, not wasm32-unknown-unknown. Under Rust >= 1.82 the latter
+      # emits the reference-types feature, which soroban-sdk 22's VM rejects at
+      # upload with "reference-types not enabled". cargo build still SUCCEEDS —
+      # the artifact is simply undeployable — so building the old target here
+      # would give a green CI and a broken deploy.
+      - name: Build WASM (deployable target)
+        run: cargo build --target wasm32v1-none --release
 
   # ── TypeScript packages ───────────────────────────────────────────────────
   #
