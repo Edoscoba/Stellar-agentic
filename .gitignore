@@ -13,6 +13,16 @@ dist/
 dist-ssr/
 *.local
 
+# Turborepo
+.turbo/
+
+# Test output
+coverage/
+playwright-report/
+test-results/
+blob-report/
+.playwright/
+
 # Editor
 .vscode/
 .idea/

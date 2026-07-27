@@ -27,9 +27,15 @@ Be respectful. Be constructive. We're all here to build something great together
 | Directory | Language | What it is |
 |-----------|----------|------------|
 | `contracts/` | Rust | Soroban smart contracts on Stellar |
-| `sdk/` | TypeScript | NPM SDK for developers |
+| `packages/core/` | TypeScript | `@stellaragent/core` — the SDK developers install |
+| `packages/react/` | TypeScript | `@stellaragent/react` — React hooks over the SDK |
+| `packages/cli/` | TypeScript | `@stellaragent/cli` — the `stellaragent` command |
 | `dashboard/` | React + TypeScript + Tailwind | Business monitoring dashboard |
+| `zk/` | Rust | Solvency-proof circuits |
 | `docs/` | Markdown | Documentation |
+
+The TypeScript packages are a pnpm workspace driven by Turborepo — run
+commands from the repo root, not from inside a package.
 
 ---
 
@@ -52,14 +58,82 @@ cd stellaragent
 # Install Rust wasm target
 rustup target add wasm32-unknown-unknown
 
-# Install SDK dependencies
-cd sdk && npm install
-
-# Install dashboard dependencies
-cd ../dashboard && npm install
+# Install every workspace package in one shot (pnpm, from the repo root)
+pnpm install
 
 # Run testnet locally (optional)
 stellar network start local
+```
+
+---
+
+## Testing
+
+All TypeScript tests run from the repo root through Turborepo:
+
+```bash
+pnpm test          # every package: core, react, cli, dashboard e2e
+pnpm typecheck     # tsc --noEmit across the workspace
+pnpm lint          # eslint across the workspace
+```
+
+To run one package's suite:
+
+```bash
+pnpm --filter @stellaragent/core test
+pnpm --filter @stellaragent/core test:watch
+```
+
+### Coverage gate on `packages/core/src/math`
+
+`packages/core/src/math` is the correctness-critical part of the SDK — every
+agent bid score and spend-limit check flows through it, and its whole reason
+for existing is that native floats round differently on x86 and ARM. A
+regression there is a silent cross-platform determinism break, not a crash,
+so it is gated at **100% line, branch, function and statement coverage**:
+
+```bash
+pnpm --filter @stellaragent/core test:coverage
+```
+
+CI fails if coverage drops below that. Thresholds live in
+[`packages/core/vitest.config.ts`](packages/core/vitest.config.ts). If you add
+a helper to `math/`, add tests for it in the same PR.
+
+### Dashboard e2e (Playwright)
+
+```bash
+cd dashboard
+pnpm exec playwright install chromium   # one-time browser download
+pnpm test                               # builds, serves, and runs the specs
+pnpm test:ui                            # interactive runner
+```
+
+The specs live in [`dashboard/e2e/`](dashboard/e2e/) and run against a
+production `vite preview` build, so CI exercises the same bundle that ships.
+
+### Local-network integration tests
+
+`packages/core/src/__tests__/integration.local.test.ts` runs against a Soroban
+standalone network and is **skipped by default**. To run it you need a local
+network and the contracts deployed:
+
+```bash
+stellar network start local
+STELLAR_LOCAL_INTEGRATION=1 pnpm --filter @stellaragent/core test
+```
+
+Most of its lifecycle assertions are still `it.todo` — they are the acceptance
+criteria for the in-flight "real Soroban invocation" work, since
+`openChannel`/`payForAPI`/`requestWork` are stubs today.
+
+### Rust contracts
+
+```bash
+cd contracts
+cargo test --all
+cargo clippy --all-targets -- -D warnings
+cargo fmt --all -- --check
 ```
 
 ---

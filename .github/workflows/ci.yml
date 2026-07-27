@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # ── Rust Contracts ────────────────────────────────────────────────────────
   contracts:
@@ -41,45 +45,14 @@ jobs:
       - name: Build WASM
         run: cargo build --target wasm32-unknown-unknown --release
 
-  # ── TypeScript SDK ────────────────────────────────────────────────────────
-  sdk:
-    name: SDK (TypeScript)
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: sdk
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: latest
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'pnpm'
-          cache-dependency-path: pnpm-lock.yaml
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-        working-directory: .
-
-      - name: Type check
-        run: pnpm --filter @stellaragent/sdk typecheck
-
-      - name: Run tests
-        run: pnpm --filter @stellaragent/sdk test
-
-      - name: Build
-        run: pnpm --filter @stellaragent/sdk build
-
-  # ── Dashboard ─────────────────────────────────────────────────────────────
-  dashboard:
-    name: Dashboard (React)
+  # ── TypeScript packages ───────────────────────────────────────────────────
+  #
+  # Previously this job ran in a `sdk/` directory that does not exist and
+  # filtered on `@stellaragent/sdk`, a package name that does not exist
+  # either — so every step was a no-op or an error. It now drives the whole
+  # pnpm/turbo workspace from the repo root.
+  packages:
+    name: Packages (TypeScript)
     runs-on: ubuntu-latest
 
     steps:
@@ -88,7 +61,7 @@ jobs:
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
         with:
-          version: latest
+          version: 9
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -101,10 +74,117 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Type check
-        run: pnpm --filter @stellaragent/dashboard typecheck
+        run: pnpm run typecheck
 
       - name: Lint
-        run: pnpm --filter @stellaragent/dashboard lint
+        run: pnpm run lint
 
       - name: Build
-        run: pnpm --filter @stellaragent/dashboard build
+        run: pnpm run build
+
+      # `--filter '!@stellaragent/dashboard'` keeps Playwright out of this
+      # job — the dashboard e2e suite needs a browser and runs separately.
+      - name: Unit tests
+        run: pnpm --filter '!@stellaragent/dashboard' run test
+
+  # ── Deterministic math coverage gate ──────────────────────────────────────
+  #
+  # packages/core/src/math is the correctness-critical core: every bid score
+  # and spend-limit check flows through it, and a regression there is a silent
+  # cross-platform determinism break. The thresholds live in
+  # packages/core/vitest.config.ts and this job fails when they are not met.
+  math-coverage:
+    name: Coverage gate (core/math)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run coverage (fails below threshold)
+        run: pnpm --filter @stellaragent/core run test:coverage
+
+      - name: Summarise coverage
+        if: always()
+        run: |
+          SUMMARY=packages/core/coverage/coverage-summary.json
+          if [ ! -f "$SUMMARY" ]; then
+            echo "No coverage summary produced" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          {
+            echo "### Coverage — packages/core/src/math"
+            echo ""
+            echo "| Metric | % |"
+            echo "| --- | --- |"
+            node -e '
+              const t = require("./packages/core/coverage/coverage-summary.json").total;
+              for (const k of ["lines", "statements", "functions", "branches"]) {
+                console.log(`| ${k} | ${t[k].pct}% |`);
+              }
+            '
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-coverage
+          path: packages/core/coverage/
+          retention-days: 7
+
+  # ── Dashboard e2e ─────────────────────────────────────────────────────────
+  dashboard-e2e:
+    name: Dashboard (Playwright)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # @stellaragent/dashboard imports @stellaragent/core, which must be
+      # built before vite can resolve it.
+      - name: Build workspace dependencies
+        run: pnpm --filter @stellaragent/dashboard^... run build
+
+      - name: Install Playwright browsers
+        run: pnpm --filter @stellaragent/dashboard exec playwright install --with-deps chromium
+
+      - name: Run e2e tests
+        run: pnpm --filter @stellaragent/dashboard run test
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: dashboard/playwright-report/
+          retention-days: 7

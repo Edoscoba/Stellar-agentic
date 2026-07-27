@@ -118,6 +118,22 @@ const DEFAULT_CONTRACTS: Record<Network, ContractAddresses> = {
   },
 };
 
+/**
+ * Whether a URL points at the local machine, and may therefore be spoken to
+ * over plaintext HTTP. Anything else — including a LAN address — must use
+ * TLS, so a misconfigured `horizonUrl` fails loudly instead of silently
+ * transmitting signed transactions in the clear.
+ */
+function isLoopbackUrl(url: string): boolean {
+  try {
+    const { protocol, hostname } = new URL(url);
+    if (protocol === 'https:') return false;
+    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]';
+  } catch {
+    return false;
+  }
+}
+
 // ─── StellarAgent ─────────────────────────────────────────────────────────────
 
 /**
@@ -152,7 +168,14 @@ export class StellarAgent {
     this.keypair = keypair;
     this.networkConfig = networkConfig;
     this.contracts = contracts;
-    this.horizon = new Horizon.Server(networkConfig.horizonUrl);
+    // `Horizon.Server` refuses plain-HTTP endpoints unless `allowHttp` is set,
+    // which made the `local` network config (http://localhost:8000) throw
+    // "Cannot connect to insecure horizon server" from the constructor. Allow
+    // HTTP for loopback only — a plaintext connection to a real network would
+    // expose submitted transactions, so this must not be blanket-enabled.
+    this.horizon = new Horizon.Server(networkConfig.horizonUrl, {
+      allowHttp: isLoopbackUrl(networkConfig.horizonUrl),
+    });
   }
 
   // ── Factory Methods ──────────────────────────────────────────────────────
