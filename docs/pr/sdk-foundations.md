@@ -111,7 +111,7 @@ compromised, or its memory is dumped"): the agent holds a URL and a token,
 policy lives at the boundary where it is enforced even when the caller is
 compromised, and rotation is a token swap rather than migrating funds off every
 account. Hardware signing remains right for admin keys — that is what
-`SignerAdapter` is for. Full reasoning in [`docs/signing.md`](../signing.md).
+`SignerAdapter` is for. Full reasoning in `docs/signing.md`.
 
 The protocol returns **signed XDR rather than a raw signature** deliberately: a
 service that signed an opaque hash could not inspect what it signs, and
