@@ -37,3 +37,15 @@ identity/
 # Generated deployment configs (contract IDs are environment-specific)
 deployments/*.json
 !deployments/example.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/

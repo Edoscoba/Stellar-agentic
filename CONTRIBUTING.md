@@ -136,6 +136,42 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
 
+### Python SDK
+
+```bash
+cd python
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+
+pytest              # includes the cross-language determinism suite
+ruff check .
+mypy
+```
+
+### Cross-language determinism (TS ↔ Python)
+
+`packages/core/src/math` and `python/src/stellaragent` must produce
+**byte-identical** output. [`fixtures/determinism.json`](fixtures/determinism.json)
+holds 643 cases generated from the TypeScript implementation, and both test
+suites assert against that same file:
+
+```bash
+pnpm fixtures:generate   # regenerate from packages/core (the reference)
+pnpm fixtures:check      # fail if the committed file is stale
+```
+
+If you change either math implementation:
+
+1. Make the change.
+2. Run `pnpm fixtures:check`. If it fails, the numeric contract changed.
+3. If that was intended, run `pnpm fixtures:generate` and **review the diff** —
+   it shows exactly which values moved.
+4. Run both suites and make the other language match.
+
+The `Determinism (TS ↔ Python)` CI job runs all three steps and is a required
+check. Comparison is string equality, never numeric closeness — "close enough"
+is precisely what makes two machines disagree about a bid score.
+
 ---
 
 ## How to Contribute

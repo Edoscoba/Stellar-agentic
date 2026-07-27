@@ -87,6 +87,97 @@ jobs:
       - name: Unit tests
         run: pnpm --filter '!@stellaragent/dashboard' run test
 
+  # ── Python SDK ────────────────────────────────────────────────────────────
+  python:
+    name: SDK (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.10', '3.11', '3.12', '3.13']
+    defaults:
+      run:
+        working-directory: python
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+          cache-dependency-path: python/pyproject.toml
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Type check
+        run: mypy
+
+      # Includes tests/test_determinism.py, which asserts the Python math
+      # modules produce byte-identical output to the TypeScript ones for every
+      # case in fixtures/determinism.json.
+      - name: Test
+        run: pytest -q
+
+  # ── Cross-language determinism (the required check) ───────────────────────
+  #
+  # This is the regression test that matters for the determinism guarantee:
+  # fixtures/determinism.json is generated from the TypeScript implementation,
+  # and both suites assert against that same file. If they agree, the two
+  # implementations are byte-identical for every case; if either diverges,
+  # this job fails.
+  #
+  # Both halves run in one job deliberately — split across two jobs, a
+  # branch-protection rule could be satisfied by one passing while the other
+  # was never required.
+  determinism:
+    name: Determinism (TS ↔ Python)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Node dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Python package
+        run: pip install -e "./python[dev]"
+
+      # Fails if the committed fixtures are stale with respect to the
+      # TypeScript implementation — otherwise a TS change could silently make
+      # the fixtures wrong and both suites would keep agreeing with each other
+      # about the old behaviour.
+      - name: Fixtures are up to date with the TypeScript implementation
+        run: pnpm fixtures:check
+
+      - name: TypeScript side
+        run: pnpm --filter @stellaragent/core exec vitest run src/math/__tests__/determinism-fixtures.test.ts
+
+      - name: Python side
+        run: pytest python/tests/test_determinism.py -q
+
   # ── Deterministic math coverage gate ──────────────────────────────────────
   #
   # packages/core/src/math is the correctness-critical core: every bid score

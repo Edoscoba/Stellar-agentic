@@ -31,11 +31,19 @@ stellaragent/
 │   ├── agent_wallet_factory/
 │   ├── payment_channel/
 │   ├── escrow/
-│   └── rate_limiter/
-├── sdk/              # TypeScript SDK
-│   └── src/
+│   ├── rate_limiter/
+│   ├── circuit_breaker/
+│   ├── price_oracle/
+│   └── amm_swap/
+├── packages/
+│   ├── core/         # @stellaragent/core — the TypeScript SDK
+│   ├── react/        # @stellaragent/react — hooks
+│   └── cli/          # @stellaragent/cli
+├── python/           # stellaragent — the Python SDK
 ├── dashboard/        # React + Tailwind business dashboard
-│   └── src/
+├── fixtures/         # Shared TS ↔ Python determinism fixtures
+├── scripts/          # Deployment and fixture tooling
+├── zk/               # Solvency-proof circuits (Rust)
 └── docs/             # Documentation
 ```
 
@@ -122,6 +130,35 @@ agent.holdsSecretKey; // false
 
 See [docs/signing.md](docs/signing.md) for the protocol, the hardware-wallet
 adapter, and why a signing service rather than Ledger.
+
+### SDK (Python)
+
+```bash
+pip install stellaragent
+```
+
+```python
+from stellaragent import StellarAgent, SpendLimit, PayForAPIParams
+
+agent = StellarAgent.create(
+    network="testnet",
+    spend_limit=SpendLimit(amount="10", asset="USDC", period="hourly"),
+)
+
+agent.pay_for_api(
+    PayForAPIParams(
+        endpoint="https://api.example.com/inference",
+        amount="0.001",
+        asset="USDC",
+    )
+)
+```
+
+The Python SDK's deterministic math is a strict semantic port of the
+TypeScript one — both are verified byte-identical against
+[643 shared fixtures](fixtures/determinism.json) as a required CI check, so a
+mixed TS/Python agent fleet cannot disagree about a bid score. See
+[python/README.md](python/README.md).
 
 ### Contracts (Rust/Soroban)
 
