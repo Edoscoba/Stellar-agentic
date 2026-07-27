@@ -1,5 +1,7 @@
+// Keypair is no longer imported here: key handling moved behind the Signer
+// abstraction in ./signer.ts. The rest are staged for the pending Soroban
+// invocation work.
 import {
-  Keypair,
   Networks,
   TransactionBuilder,
   BASE_FEE,
@@ -110,6 +112,29 @@ export type { ContractKey } from './contracts.js';
 
 import { resolveContracts, assertDeployed } from './contracts.js';
 
+// ─── Signing ─────────────────────────────────────────────────────────────────
+//
+// The agent signs through a Signer rather than an in-memory Keypair, so key
+// material need never live in this process. See ./signer.ts.
+
+export {
+  KeypairSigner,
+  RemoteSigner,
+  SignerAdapter,
+  SigningError,
+  isSigner,
+} from './signer.js';
+export type {
+  Signer,
+  SignTransactionOptions,
+  SignAuthEntryOptions,
+  RemoteSignerOptions,
+  Sep43Like,
+} from './signer.js';
+
+import { KeypairSigner, SigningError } from './signer.js';
+import type { Signer } from './signer.js';
+
 /**
  * Whether a URL points at the local machine, and may therefore be spoken to
  * over plaintext HTTP. Anything else — including a LAN address — must use
@@ -146,18 +171,29 @@ function isLoopbackUrl(url: string): boolean {
  * ```
  */
 export class StellarAgent {
-  private keypair: Keypair;
+  /**
+   * Where signing happens. For a {@link RemoteSigner} this holds a URL and a
+   * token — no key material — which is the entire point of the abstraction.
+   */
+  private signer: Signer;
+  /**
+   * Resolved once at `create()` time. Cached so `address` stays a synchronous
+   * getter even when the signer derives it over the network.
+   */
+  private publicKey: string;
   private networkConfig: NetworkConfig;
   private contracts: ContractAddresses;
   private horizon: Horizon.Server;
   private activeChannelId?: bigint;
 
   private constructor(
-    keypair: Keypair,
+    signer: Signer,
+    publicKey: string,
     networkConfig: NetworkConfig,
     contracts: ContractAddresses,
   ) {
-    this.keypair = keypair;
+    this.signer = signer;
+    this.publicKey = publicKey;
     this.networkConfig = networkConfig;
     this.contracts = contracts;
     // `Horizon.Server` refuses plain-HTTP endpoints unless `allowHttp` is set,
@@ -174,7 +210,11 @@ export class StellarAgent {
 
   /**
    * Create a new StellarAgent instance.
-   * If no secretKey is provided, generates a fresh keypair.
+   *
+   * Supply exactly one of:
+   * - `signer` — any {@link Signer}. The secret never enters this process.
+   * - `secretKey` — an in-memory keypair, wrapped in a {@link KeypairSigner}.
+   * - neither — a fresh random keypair is generated.
    *
    * Contract addresses resolve from `config.contracts`, then from
    * `STELLARAGENT_*` environment variables, then from the per-network
@@ -185,12 +225,34 @@ export class StellarAgent {
    * when you only need read-only, contract-free calls such as
    * {@link StellarAgent.getBalance}.
    *
+   * @example Remote signer — no key material in this process
+   * ```typescript
+   * const agent = await StellarAgent.create({
+   *   network: 'testnet',
+   *   signer: new RemoteSigner({ url: 'https://signer.internal', token: TOKEN }),
+   * });
+   * ```
+   *
    * @throws {ContractsNotDeployedError} when contracts are not deployed
    */
   static async create(config: StellarAgentConfig): Promise<StellarAgent> {
-    const keypair = config.secretKey
-      ? Keypair.fromSecret(config.secretKey)
-      : Keypair.random();
+    if (config.signer && config.secretKey) {
+      throw new Error(
+        'StellarAgent.create: pass either `signer` or `secretKey`, not both. ' +
+          'Supplying a secret alongside a remote signer would defeat the point of the signer.',
+      );
+    }
+
+    const generatedKeypair = !config.signer && !config.secretKey;
+    const signer: Signer = config.signer
+      ? config.signer
+      : config.secretKey
+        ? KeypairSigner.fromSecret(config.secretKey)
+        : KeypairSigner.random();
+
+    // Derived through the Signer interface, so a remote signer reports its
+    // address without the secret ever being loaded here.
+    const publicKey = await signer.getPublicKey();
 
     const networkConfig = NETWORK_CONFIGS[config.network];
     const contracts = resolveContracts(config.network, config.contracts);
@@ -199,10 +261,11 @@ export class StellarAgent {
       assertDeployed(config.network, contracts);
     }
 
-    const agent = new StellarAgent(keypair, networkConfig, contracts);
+    const agent = new StellarAgent(signer, publicKey, networkConfig, contracts);
 
-    // If testnet and fresh keypair, fund from friendbot
-    if (config.network === 'testnet' && !config.secretKey) {
+    // Only a freshly generated keypair gets friendbot funding — a supplied
+    // secret or an external signer is assumed to already have an account.
+    if (config.network === 'testnet' && generatedKeypair) {
       await agent.fundFromFriendbot();
     }
 
@@ -226,14 +289,49 @@ export class StellarAgent {
 
   // ── Identity ─────────────────────────────────────────────────────────────
 
-  /** The agent's Stellar public address */
+  /**
+   * The agent's Stellar public address.
+   *
+   * Resolved through the {@link Signer} at `create()` time, so this works
+   * identically for a remote signer that never exposes its secret.
+   */
   get address(): string {
-    return this.keypair.publicKey();
+    return this.publicKey;
   }
 
-  /** The agent's secret key — keep this safe! */
+  /**
+   * The agent's secret key.
+   *
+   * Only available when the agent was built from an in-memory keypair. With
+   * any other {@link Signer} there is no secret in this process to return —
+   * which is the point — so this throws rather than returning something
+   * misleading.
+   *
+   * @deprecated Reading key material off a live agent is the pattern the
+   * {@link Signer} abstraction exists to remove. Hold the secret yourself if
+   * you need it, or use a {@link RemoteSigner} and stop having one.
+   *
+   * @throws {SigningError} when signing is not backed by a local keypair
+   */
   get secretKey(): string {
-    return this.keypair.secret();
+    if (!(this.signer instanceof KeypairSigner)) {
+      throw new SigningError(
+        'This agent has no secret key to expose — it signs via ' +
+          `${this.signer.constructor.name}, which holds the key elsewhere. ` +
+          'That is the intended behaviour for a remote signer.',
+      );
+    }
+    return this.signer.exportSecret();
+  }
+
+  /**
+   * Whether this agent holds key material in-process.
+   *
+   * `false` for a remote or hardware signer. Useful for asserting a
+   * production deployment is not running with an in-memory secret.
+   */
+  get holdsSecretKey(): boolean {
+    return this.signer instanceof KeypairSigner;
   }
 
   // ── Payment Channel ──────────────────────────────────────────────────────

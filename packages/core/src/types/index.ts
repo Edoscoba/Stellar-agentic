@@ -42,7 +42,32 @@ export interface SpendLimit {
 export interface StellarAgentConfig {
   /** Stellar network to connect to */
   network: Network;
-  /** Private key for the agent wallet (keep secret!) */
+  /**
+   * Where signing happens.
+   *
+   * Prefer this over `secretKey` for anything holding real funds: with a
+   * `RemoteSigner` (or a hardware/wallet-backed one) the key never enters
+   * this process, so a heap dump or a compromised transitive dependency
+   * cannot yield it. Mutually exclusive with `secretKey`.
+   *
+   * Typed structurally rather than imported to keep `types/` free of runtime
+   * imports; see `signer.ts` for the interface and its implementations.
+   */
+  signer?: {
+    getPublicKey(): Promise<string>;
+    signTransaction(xdr: string, options: { networkPassphrase: string }): Promise<string>;
+    signAuthEntry(
+      authEntryXdr: string,
+      options: { networkPassphrase: string; validUntilLedgerSeq: number },
+    ): Promise<string>;
+  };
+  /**
+   * Private key for the agent wallet (keep secret!).
+   *
+   * Holding a raw secret in a long-lived process is a real risk for an agent
+   * with funds — use `signer` instead where that matters. Mutually exclusive
+   * with `signer`.
+   */
   secretKey?: string;
   /** Spend limit enforced on-chain */
   spendLimit?: SpendLimit;

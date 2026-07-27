@@ -99,6 +99,30 @@ const job = await agent.requestWork({
 });
 ```
 
+#### Production: keep the key out of the agent process
+
+Holding a raw secret in a long-lived process is a real risk once an agent has
+funds. Pass a `signer` instead — the key stays behind a network boundary and
+never enters this process:
+
+```typescript
+import { StellarAgent, RemoteSigner } from '@stellaragent/sdk';
+
+const agent = await StellarAgent.create({
+  network: 'mainnet',
+  signer: new RemoteSigner({
+    url: 'https://signer.internal',
+    token: process.env.SIGNER_TOKEN,
+    expectedPublicKey: process.env.AGENT_ADDRESS,
+  }),
+});
+
+agent.holdsSecretKey; // false
+```
+
+See [docs/signing.md](docs/signing.md) for the protocol, the hardware-wallet
+adapter, and why a signing service rather than Ledger.
+
 ### Contracts (Rust/Soroban)
 
 There are seven contracts, and four of them need initializing in a specific
