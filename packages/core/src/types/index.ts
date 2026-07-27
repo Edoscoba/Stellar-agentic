@@ -46,8 +46,25 @@ export interface StellarAgentConfig {
   secretKey?: string;
   /** Spend limit enforced on-chain */
   spendLimit?: SpendLimit;
-  /** Contract addresses (optional — uses defaults for network) */
+  /**
+   * Contract addresses. Anything omitted falls back to the
+   * `STELLARAGENT_<NETWORK>_<CONTRACT>` / `STELLARAGENT_<CONTRACT>`
+   * environment variables, then to the network's unconfigured sentinel.
+   */
   contracts?: Partial<ContractAddresses>;
+  /**
+   * Skip the deployed-contracts check in `StellarAgent.create()`.
+   *
+   * By default an agent refuses to be created against contract addresses
+   * that are not real deployed contract IDs, so the failure names the actual
+   * problem instead of surfacing as an opaque RPC error mid-payment. Set
+   * this when you only need calls that touch no contract at all — currently
+   * `getBalance()` — or in tests. Any contract call made on such an agent
+   * will still fail.
+   *
+   * @default false
+   */
+  allowUnconfiguredContracts?: boolean;
 }
 
 export interface AgentInfo {

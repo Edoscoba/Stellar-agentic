@@ -2,12 +2,22 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Keypair } from '@stellar/stellar-sdk';
 
 import { StellarAgent } from '../index.js';
+import type { StellarAgentConfig } from '../types/index.js';
 
-// A deterministic, well-formed test keypair, derived from an all-0x07 ed25519
-// seed so the assertions below are reproducible. It holds nothing, is never
-// funded on any real network, and must never be used outside these tests.
-const TEST_SECRET = 'SADQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQOBYHA4DQP54X';
-const TEST_PUBLIC = Keypair.fromSecret(TEST_SECRET).publicKey();
+import { TEST_SECRET, TEST_PUBLIC, DEPLOYED_CONTRACTS } from './fixtures.js';
+
+/**
+ * `StellarAgent.create()` now refuses to build an agent against contracts
+ * that are not deployed, so every unit test has to supply a structurally
+ * valid set. This helper keeps that noise out of the individual tests.
+ */
+function createAgent(config: Partial<StellarAgentConfig> = {}): Promise<StellarAgent> {
+  return StellarAgent.create({
+    network: 'testnet',
+    contracts: DEPLOYED_CONTRACTS,
+    ...config,
+  } as StellarAgentConfig);
+}
 
 /**
  * Stub `fetch` so no test ever reaches the real friendbot.
@@ -29,20 +39,20 @@ afterEach(() => {
 
 describe('StellarAgent.create — identity', () => {
   it('derives the public address from a supplied secret key', async () => {
-    const agent = await StellarAgent.create({ network: 'testnet', secretKey: TEST_SECRET });
+    const agent = await createAgent({ network: 'testnet', secretKey: TEST_SECRET });
     expect(agent.address).toBe(TEST_PUBLIC);
     expect(agent.address).toMatch(/^G[A-Z2-7]{55}$/);
   });
 
   it('exposes the same secret key it was given', async () => {
-    const agent = await StellarAgent.create({ network: 'testnet', secretKey: TEST_SECRET });
+    const agent = await createAgent({ network: 'testnet', secretKey: TEST_SECRET });
     expect(agent.secretKey).toBe(TEST_SECRET);
   });
 
   it('generates a fresh keypair when no secret is supplied', async () => {
     stubFetch(() => new Response(null, { status: 200 }));
-    const a = await StellarAgent.create({ network: 'testnet' });
-    const b = await StellarAgent.create({ network: 'testnet' });
+    const a = await createAgent({ network: 'testnet' });
+    const b = await createAgent({ network: 'testnet' });
     expect(a.address).not.toBe(b.address);
     expect(a.address).toMatch(/^G[A-Z2-7]{55}$/);
     // The generated secret must round-trip to the same address.
@@ -51,34 +61,55 @@ describe('StellarAgent.create — identity', () => {
 
   it('rejects a malformed secret key', async () => {
     await expect(
-      StellarAgent.create({ network: 'testnet', secretKey: 'not-a-secret' }),
+      createAgent({ network: 'testnet', secretKey: 'not-a-secret' }),
     ).rejects.toThrow();
   });
 
   it('rejects a public key passed where a secret is expected', async () => {
     await expect(
-      StellarAgent.create({ network: 'testnet', secretKey: TEST_PUBLIC }),
+      createAgent({ network: 'testnet', secretKey: TEST_PUBLIC }),
     ).rejects.toThrow();
   });
 });
 
 describe('StellarAgent.fromSecret', () => {
+  const contracts = { contracts: DEPLOYED_CONTRACTS };
+
   it('restores an agent at the same address', async () => {
-    const agent = await StellarAgent.fromSecret(TEST_SECRET);
+    const agent = await StellarAgent.fromSecret(TEST_SECRET, 'testnet', contracts);
     expect(agent.address).toBe(TEST_PUBLIC);
   });
 
   it('defaults to testnet', async () => {
     const fetchSpy = stubFetch(() => new Response(null, { status: 200 }));
-    await StellarAgent.fromSecret(TEST_SECRET);
+    await StellarAgent.fromSecret(TEST_SECRET, undefined, contracts);
     // A restored agent is never friendbot-funded, even on testnet — funding
     // is reserved for freshly generated keypairs.
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it('accepts an explicit network', async () => {
-    const agent = await StellarAgent.fromSecret(TEST_SECRET, 'mainnet');
+    const agent = await StellarAgent.fromSecret(TEST_SECRET, 'mainnet', contracts);
     expect(agent.address).toBe(TEST_PUBLIC);
+  });
+
+  it('forwards contracts through to create()', async () => {
+    // Without this passthrough a restored agent could only ever reach
+    // contracts resolved from the environment.
+    const agent = await StellarAgent.fromSecret(TEST_SECRET, 'testnet', contracts);
+    expect((agent as unknown as { contracts: Record<string, string> }).contracts)
+      .toEqual(DEPLOYED_CONTRACTS);
+  });
+
+  it('forwards allowUnconfiguredContracts', async () => {
+    await expect(
+      StellarAgent.fromSecret(TEST_SECRET, 'mainnet', { allowUnconfiguredContracts: true }),
+    ).resolves.toBeInstanceOf(StellarAgent);
+  });
+
+  it('fails fast when given neither contracts nor the escape hatch', async () => {
+    await expect(StellarAgent.fromSecret(TEST_SECRET, 'mainnet'))
+      .rejects.toThrow(/Contracts not deployed/);
   });
 });
 
@@ -87,7 +118,7 @@ describe('StellarAgent.fromSecret', () => {
 describe('friendbot funding', () => {
   it('funds a fresh testnet keypair', async () => {
     const fetchSpy = stubFetch(() => new Response(null, { status: 200 }));
-    const agent = await StellarAgent.create({ network: 'testnet' });
+    const agent = await createAgent({ network: 'testnet' });
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(fetchSpy.mock.calls[0]![0]).toBe(
       `https://friendbot.stellar.org?addr=${agent.address}`,
@@ -96,13 +127,13 @@ describe('friendbot funding', () => {
 
   it('does not fund when a secret key is supplied', async () => {
     const fetchSpy = stubFetch(() => new Response(null, { status: 200 }));
-    await StellarAgent.create({ network: 'testnet', secretKey: TEST_SECRET });
+    await createAgent({ network: 'testnet', secretKey: TEST_SECRET });
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it.each(['mainnet', 'local'] as const)('does not fund on %s', async (network) => {
     const fetchSpy = stubFetch(() => new Response(null, { status: 200 }));
-    await StellarAgent.create({ network });
+    await createAgent({ network });
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
@@ -110,7 +141,7 @@ describe('friendbot funding', () => {
     // An already-funded account is a normal, non-fatal outcome.
     stubFetch(() => new Response(null, { status: 400 }));
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    await expect(StellarAgent.create({ network: 'testnet' })).resolves.toBeInstanceOf(StellarAgent);
+    await expect(createAgent({ network: 'testnet' })).resolves.toBeInstanceOf(StellarAgent);
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('Friendbot funding failed'));
   });
 
@@ -119,7 +150,7 @@ describe('friendbot funding', () => {
       throw new Error('ENOTFOUND');
     });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    await expect(StellarAgent.create({ network: 'testnet' })).resolves.toBeInstanceOf(StellarAgent);
+    await expect(createAgent({ network: 'testnet' })).resolves.toBeInstanceOf(StellarAgent);
     expect(warn).toHaveBeenCalledWith('Could not reach friendbot');
   });
 });
@@ -131,8 +162,8 @@ describe('contract address resolution', () => {
   const contractsOf = (agent: StellarAgent) =>
     (agent as unknown as { contracts: Record<string, string> }).contracts;
 
-  it('populates all five contract slots from the network defaults', async () => {
-    const agent = await StellarAgent.create({ network: 'testnet', secretKey: TEST_SECRET });
+  it('populates all five contract slots', async () => {
+    const agent = await createAgent({ network: 'testnet', secretKey: TEST_SECRET });
     expect(Object.keys(contractsOf(agent)).sort()).toEqual([
       'agentWalletFactory',
       'circuitBreaker',
@@ -142,43 +173,127 @@ describe('contract address resolution', () => {
     ]);
   });
 
-  it('lets an explicit override replace a single default', async () => {
+  it('lets an explicit override replace a single address', async () => {
     const custom = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
-    const agent = await StellarAgent.create({
+    const agent = await createAgent({
       network: 'testnet',
       secretKey: TEST_SECRET,
-      contracts: { paymentChannel: custom },
+      contracts: { ...DEPLOYED_CONTRACTS, paymentChannel: custom },
     });
     expect(contractsOf(agent).paymentChannel).toBe(custom);
-    // The other four keep their defaults.
-    expect(contractsOf(agent).escrow).not.toBe(custom);
-  });
-
-  it('lets overrides replace every slot', async () => {
-    const all = {
-      agentWalletFactory: 'C1',
-      paymentChannel: 'C2',
-      escrow: 'C3',
-      rateLimiter: 'C4',
-      circuitBreaker: 'C5',
-    };
-    const agent = await StellarAgent.create({
-      network: 'testnet',
-      secretKey: TEST_SECRET,
-      contracts: all,
-    });
-    expect(contractsOf(agent)).toEqual(all);
+    expect(contractsOf(agent).escrow).toBe(DEPLOYED_CONTRACTS.escrow);
   });
 
   it('does not share contract state between instances', async () => {
-    const a = await StellarAgent.create({
+    const custom = 'CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC';
+    const a = await createAgent({
       network: 'testnet',
       secretKey: TEST_SECRET,
-      contracts: { escrow: 'CUSTOM_A' },
+      contracts: { ...DEPLOYED_CONTRACTS, escrow: custom },
     });
-    const b = await StellarAgent.create({ network: 'testnet', secretKey: TEST_SECRET });
-    expect(contractsOf(a).escrow).toBe('CUSTOM_A');
-    expect(contractsOf(b).escrow).not.toBe('CUSTOM_A');
+    const b = await createAgent({ network: 'testnet', secretKey: TEST_SECRET });
+    expect(contractsOf(a).escrow).toBe(custom);
+    expect(contractsOf(b).escrow).toBe(DEPLOYED_CONTRACTS.escrow);
+  });
+});
+
+// ─── Fast-fail on undeployed contracts ───────────────────────────────────────
+
+describe('deployed-contracts check', () => {
+  it('refuses to create an agent against the testnet placeholders', async () => {
+    // The whole point: previously this succeeded and every later contract
+    // call failed with an opaque RPC error instead.
+    await expect(
+      StellarAgent.create({ network: 'testnet', secretKey: TEST_SECRET }),
+    ).rejects.toThrow(/Contracts not deployed for network "testnet"/);
+  });
+
+  it.each(['mainnet', 'local'] as const)(
+    'refuses to create an agent on %s with no configuration',
+    async (network) => {
+      await expect(
+        StellarAgent.create({ network, secretKey: TEST_SECRET }),
+      ).rejects.toThrow(/Contracts not deployed/);
+    },
+  );
+
+  it('points at the deployment runbook', async () => {
+    await expect(
+      StellarAgent.create({ network: 'testnet', secretKey: TEST_SECRET }),
+    ).rejects.toThrow(/docs\/deployment\.md/);
+  });
+
+  it('rejects a partially configured set', async () => {
+    await expect(
+      StellarAgent.create({
+        network: 'testnet',
+        secretKey: TEST_SECRET,
+        contracts: { ...DEPLOYED_CONTRACTS, escrow: '' },
+      }),
+    ).rejects.toThrow(/escrow/);
+  });
+
+  it('rejects an address with a single-character typo', async () => {
+    await expect(
+      StellarAgent.create({
+        network: 'testnet',
+        secretKey: TEST_SECRET,
+        contracts: {
+          ...DEPLOYED_CONTRACTS,
+          escrow: `${DEPLOYED_CONTRACTS.escrow.slice(0, -1)}A`,
+        },
+      }),
+    ).rejects.toThrow(/Contracts not deployed/);
+  });
+
+  it('succeeds with a fully deployed set', async () => {
+    await expect(
+      StellarAgent.create({
+        network: 'testnet',
+        secretKey: TEST_SECRET,
+        contracts: DEPLOYED_CONTRACTS,
+      }),
+    ).resolves.toBeInstanceOf(StellarAgent);
+  });
+
+  it('resolves addresses from environment variables', async () => {
+    const vars = {
+      STELLARAGENT_TESTNET_AGENT_WALLET_FACTORY: DEPLOYED_CONTRACTS.agentWalletFactory,
+      STELLARAGENT_TESTNET_PAYMENT_CHANNEL: DEPLOYED_CONTRACTS.paymentChannel,
+      STELLARAGENT_TESTNET_ESCROW: DEPLOYED_CONTRACTS.escrow,
+      STELLARAGENT_TESTNET_RATE_LIMITER: DEPLOYED_CONTRACTS.rateLimiter,
+      STELLARAGENT_TESTNET_CIRCUIT_BREAKER: DEPLOYED_CONTRACTS.circuitBreaker,
+    };
+    Object.assign(process.env, vars);
+    try {
+      const agent = await StellarAgent.create({ network: 'testnet', secretKey: TEST_SECRET });
+      expect((agent as unknown as { contracts: unknown }).contracts).toEqual(DEPLOYED_CONTRACTS);
+    } finally {
+      for (const name of Object.keys(vars)) delete process.env[name];
+    }
+  });
+
+  it('can be bypassed for read-only use', async () => {
+    // getBalance() touches no contract, so an unconfigured agent is still
+    // useful for it — but only when the caller opts in explicitly.
+    const agent = await StellarAgent.create({
+      network: 'testnet',
+      secretKey: TEST_SECRET,
+      allowUnconfiguredContracts: true,
+    });
+    expect(agent.address).toBe(TEST_PUBLIC);
+  });
+
+  it('still fails contract calls when the check is bypassed', async () => {
+    const agent = await StellarAgent.create({
+      network: 'testnet',
+      secretKey: TEST_SECRET,
+      allowUnconfiguredContracts: true,
+    });
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    await expect(
+      agent.openChannel({ deposit: '10', limitPerPeriod: '1', period: 'hourly' }),
+    ).rejects.toThrow();
   });
 });
 
@@ -194,7 +309,7 @@ describe('network configuration', () => {
     ['mainnet', 'Public Global Stellar Network ; September 2015'],
     ['local', 'Standalone Network ; February 2017'],
   ] as const)('selects the %s passphrase', async (network, passphrase) => {
-    const agent = await StellarAgent.create({ network, secretKey: TEST_SECRET });
+    const agent = await createAgent({ network, secretKey: TEST_SECRET });
     expect(networkOf(agent).networkPassphrase).toBe(passphrase);
   });
 
@@ -206,14 +321,14 @@ describe('network configuration', () => {
     // loopback exemption this call threw "Cannot connect to insecure horizon
     // server" and the local network was unusable — including for the
     // standalone-network integration tests.
-    const agent = await StellarAgent.create({ network: 'local', secretKey: TEST_SECRET });
+    const agent = await createAgent({ network: 'local', secretKey: TEST_SECRET });
     expect(horizonOf(agent).serverURL.toString()).toContain('localhost:8000');
   });
 
   it.each(['testnet', 'mainnet'] as const)(
     'uses an https Horizon endpoint on %s',
     async (network) => {
-      const agent = await StellarAgent.create({ network, secretKey: TEST_SECRET });
+      const agent = await createAgent({ network, secretKey: TEST_SECRET });
       expect(networkOf(agent).horizonUrl.startsWith('https://')).toBe(true);
     },
   );
@@ -226,7 +341,7 @@ describe('network configuration', () => {
     NETWORK_CONFIGS.local.horizonUrl = 'http://horizon.example.com';
     try {
       await expect(
-        StellarAgent.create({ network: 'local', secretKey: TEST_SECRET }),
+        createAgent({ network: 'local', secretKey: TEST_SECRET }),
       ).rejects.toThrow(/insecure horizon server/);
     } finally {
       NETWORK_CONFIGS.local.horizonUrl = original;
@@ -249,7 +364,7 @@ describe('payForAPI — validation guards', () => {
 
   let agent: StellarAgent;
   beforeEach(async () => {
-    agent = await StellarAgent.create({ network: 'testnet', secretKey: TEST_SECRET });
+    agent = await createAgent({ network: 'testnet', secretKey: TEST_SECRET });
   });
 
   it('refuses to pay with no open channel', async () => {
@@ -317,7 +432,7 @@ describe('payForAPI — validation guards', () => {
 describe('getBalance', () => {
   let agent: StellarAgent;
   beforeEach(async () => {
-    agent = await StellarAgent.create({ network: 'testnet', secretKey: TEST_SECRET });
+    agent = await createAgent({ network: 'testnet', secretKey: TEST_SECRET });
   });
 
   /** Replace the Horizon server with a controllable stub. */
@@ -380,7 +495,7 @@ describe('getBalance', () => {
 describe('unimplemented contract methods', () => {
   let agent: StellarAgent;
   beforeEach(async () => {
-    agent = await StellarAgent.create({ network: 'testnet', secretKey: TEST_SECRET });
+    agent = await createAgent({ network: 'testnet', secretKey: TEST_SECRET });
     vi.spyOn(console, 'log').mockImplementation(() => {});
   });
 

@@ -91,32 +91,24 @@ export type {
 export { CircuitBreaker } from './circuitBreaker.js';
 export type { CircuitBreakerOptions } from './circuitBreaker.js';
 
-// ─── Default Testnet Contract Addresses ──────────────────────────────────────
-// TODO: Update these after deploying contracts to testnet
+// ─── Contract address resolution ─────────────────────────────────────────────
+//
+// Addresses used to be hard-coded here as obviously-fake placeholders. They
+// now resolve from explicit config or environment variables, and an
+// unconfigured network fails fast at create() time. See ./contracts.ts.
 
-const DEFAULT_CONTRACTS: Record<Network, ContractAddresses> = {
-  testnet: {
-    agentWalletFactory: 'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
-    paymentChannel: 'CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB',
-    escrow: 'CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC',
-    rateLimiter: 'CDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD',
-    circuitBreaker: 'CEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE',
-  },
-  mainnet: {
-    agentWalletFactory: '',
-    paymentChannel: '',
-    escrow: '',
-    rateLimiter: '',
-    circuitBreaker: '',
-  },
-  local: {
-    agentWalletFactory: '',
-    paymentChannel: '',
-    escrow: '',
-    rateLimiter: '',
-    circuitBreaker: '',
-  },
-};
+export {
+  resolveContracts,
+  assertDeployed,
+  isDeployedAddress,
+  envVarNames,
+  ContractsNotDeployedError,
+  UNCONFIGURED_CONTRACTS,
+  CONTRACT_KEYS,
+} from './contracts.js';
+export type { ContractKey } from './contracts.js';
+
+import { resolveContracts, assertDeployed } from './contracts.js';
 
 /**
  * Whether a URL points at the local machine, and may therefore be spoken to
@@ -183,6 +175,17 @@ export class StellarAgent {
   /**
    * Create a new StellarAgent instance.
    * If no secretKey is provided, generates a fresh keypair.
+   *
+   * Contract addresses resolve from `config.contracts`, then from
+   * `STELLARAGENT_*` environment variables, then from the per-network
+   * unconfigured sentinels. If the result is not a set of real deployed
+   * contract IDs this throws {@link ContractsNotDeployedError} immediately,
+   * rather than letting an opaque RPC error surface later from the middle of
+   * a payment. Pass `allowUnconfiguredContracts: true` to skip that check
+   * when you only need read-only, contract-free calls such as
+   * {@link StellarAgent.getBalance}.
+   *
+   * @throws {ContractsNotDeployedError} when contracts are not deployed
    */
   static async create(config: StellarAgentConfig): Promise<StellarAgent> {
     const keypair = config.secretKey
@@ -190,10 +193,11 @@ export class StellarAgent {
       : Keypair.random();
 
     const networkConfig = NETWORK_CONFIGS[config.network];
-    const contracts = {
-      ...DEFAULT_CONTRACTS[config.network],
-      ...config.contracts,
-    };
+    const contracts = resolveContracts(config.network, config.contracts);
+
+    if (!config.allowUnconfiguredContracts) {
+      assertDeployed(config.network, contracts);
+    }
 
     const agent = new StellarAgent(keypair, networkConfig, contracts);
 
@@ -207,12 +211,17 @@ export class StellarAgent {
 
   /**
    * Restore an agent from an existing secret key.
+   *
+   * `options` forwards the rest of {@link StellarAgentConfig} — notably
+   * `contracts` and `allowUnconfiguredContracts`, without which a restored
+   * agent could only ever target contracts resolved from the environment.
    */
   static async fromSecret(
     secretKey: string,
     network: Network = 'testnet',
+    options: Omit<StellarAgentConfig, 'network' | 'secretKey'> = {},
   ): Promise<StellarAgent> {
-    return StellarAgent.create({ network, secretKey });
+    return StellarAgent.create({ ...options, network, secretKey });
   }
 
   // ── Identity ─────────────────────────────────────────────────────────────

@@ -33,3 +33,7 @@ blob-report/
 # Stellar
 .soroban/
 identity/
+
+# Generated deployment configs (contract IDs are environment-specific)
+deployments/*.json
+!deployments/example.json

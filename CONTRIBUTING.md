@@ -173,6 +173,32 @@ Types: `feat`, `fix`, `docs`, `test`, `chore`, `refactor`, `perf`
 
 ---
 
+## Deploying contracts
+
+There are seven Soroban contracts, four need a one-time `initialize`, and
+three hold addresses of the others that can only be set once all seven exist.
+Do not deploy them by hand — use the script:
+
+```bash
+pnpm deploy:contracts --network local --source alice
+pnpm deploy:contracts --network local --source alice --dry-run   # preview only
+```
+
+It builds every WASM, deploys all seven, initializes them in the required
+order, cross-wires the references, and writes `deployments/<network>.json`
+plus a matching `.env` block.
+
+Point the SDK at the result with the printed `STELLARAGENT_<NETWORK>_*`
+environment variables, or by passing `contracts:` to `StellarAgent.create()`.
+An agent created against undeployed contracts throws
+`ContractsNotDeployedError` immediately rather than failing later inside an
+RPC call.
+
+Full runbook — including the by-hand sequence and the initialization ordering
+constraints — is in **[docs/deployment.md](docs/deployment.md)**.
+
+---
+
 ## Good First Issues
 
 If you're new to the project, start here:

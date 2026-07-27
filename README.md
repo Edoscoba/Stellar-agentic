@@ -101,11 +101,17 @@ const job = await agent.requestWork({
 
 ### Contracts (Rust/Soroban)
 
+There are seven contracts, and four of them need initializing in a specific
+order before three others can be wired to them — so deploy them with the
+script rather than by hand:
+
 ```bash
-cd contracts
-cargo build --target wasm32-unknown-unknown --release
-stellar contract deploy --wasm target/wasm32-unknown-unknown/release/agent_wallet_factory.wasm --network testnet
+pnpm deploy:contracts --network testnet --source alice
 ```
+
+It builds every WASM, deploys, initializes, cross-wires, and writes
+`deployments/testnet.json` plus a matching `.env` block. Full runbook:
+[docs/deployment.md](docs/deployment.md).
 
 ### Dashboard
 
