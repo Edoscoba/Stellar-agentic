@@ -14,7 +14,11 @@
     "strict": true,
     "noUnusedLocals": false,
     "noUnusedParameters": false,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+    // The app bundle is browser-only. Node globals must not typecheck here
+    // even though @types/node is installed for the Playwright config — hence
+    // the explicit empty `types`. E2E code is checked by tsconfig.e2e.json.
+    "types": []
   },
   "include": ["src"]
 }

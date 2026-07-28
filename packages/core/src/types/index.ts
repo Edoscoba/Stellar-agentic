@@ -42,12 +42,54 @@ export interface SpendLimit {
 export interface StellarAgentConfig {
   /** Stellar network to connect to */
   network: Network;
-  /** Private key for the agent wallet (keep secret!) */
+  /**
+   * Where signing happens.
+   *
+   * Prefer this over `secretKey` for anything holding real funds: with a
+   * `RemoteSigner` (or a hardware/wallet-backed one) the key never enters
+   * this process, so a heap dump or a compromised transitive dependency
+   * cannot yield it. Mutually exclusive with `secretKey`.
+   *
+   * Typed structurally rather than imported to keep `types/` free of runtime
+   * imports; see `signer.ts` for the interface and its implementations.
+   */
+  signer?: {
+    getPublicKey(): Promise<string>;
+    signTransaction(xdr: string, options: { networkPassphrase: string }): Promise<string>;
+    signAuthEntry(
+      authEntryXdr: string,
+      options: { networkPassphrase: string; validUntilLedgerSeq: number },
+    ): Promise<string>;
+  };
+  /**
+   * Private key for the agent wallet (keep secret!).
+   *
+   * Holding a raw secret in a long-lived process is a real risk for an agent
+   * with funds — use `signer` instead where that matters. Mutually exclusive
+   * with `signer`.
+   */
   secretKey?: string;
   /** Spend limit enforced on-chain */
   spendLimit?: SpendLimit;
-  /** Contract addresses (optional — uses defaults for network) */
+  /**
+   * Contract addresses. Anything omitted falls back to the
+   * `STELLARAGENT_<NETWORK>_<CONTRACT>` / `STELLARAGENT_<CONTRACT>`
+   * environment variables, then to the network's unconfigured sentinel.
+   */
   contracts?: Partial<ContractAddresses>;
+  /**
+   * Skip the deployed-contracts check in `StellarAgent.create()`.
+   *
+   * By default an agent refuses to be created against contract addresses
+   * that are not real deployed contract IDs, so the failure names the actual
+   * problem instead of surfacing as an opaque RPC error mid-payment. Set
+   * this when you only need calls that touch no contract at all — currently
+   * `getBalance()` — or in tests. Any contract call made on such an agent
+   * will still fail.
+   *
+   * @default false
+   */
+  allowUnconfiguredContracts?: boolean;
 }
 
 export interface AgentInfo {

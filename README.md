@@ -31,11 +31,19 @@ stellaragent/
 │   ├── agent_wallet_factory/
 │   ├── payment_channel/
 │   ├── escrow/
-│   └── rate_limiter/
-├── sdk/              # TypeScript SDK
-│   └── src/
+│   ├── rate_limiter/
+│   ├── circuit_breaker/
+│   ├── price_oracle/
+│   └── amm_swap/
+├── packages/
+│   ├── core/         # @stellaragent/core — the TypeScript SDK
+│   ├── react/        # @stellaragent/react — hooks
+│   └── cli/          # @stellaragent/cli
+├── python/           # stellaragent — the Python SDK
 ├── dashboard/        # React + Tailwind business dashboard
-│   └── src/
+├── fixtures/         # Shared TS ↔ Python determinism fixtures
+├── scripts/          # Deployment and fixture tooling
+├── zk/               # Solvency-proof circuits (Rust)
 └── docs/             # Documentation
 ```
 
@@ -99,13 +107,72 @@ const job = await agent.requestWork({
 });
 ```
 
-### Contracts (Rust/Soroban)
+#### Production: keep the key out of the agent process
+
+Holding a raw secret in a long-lived process is a real risk once an agent has
+funds. Pass a `signer` instead — the key stays behind a network boundary and
+never enters this process:
+
+```typescript
+import { StellarAgent, RemoteSigner } from '@stellaragent/sdk';
+
+const agent = await StellarAgent.create({
+  network: 'mainnet',
+  signer: new RemoteSigner({
+    url: 'https://signer.internal',
+    token: process.env.SIGNER_TOKEN,
+    expectedPublicKey: process.env.AGENT_ADDRESS,
+  }),
+});
+
+agent.holdsSecretKey; // false
+```
+
+See [docs/signing.md](docs/signing.md) for the protocol, the hardware-wallet
+adapter, and why a signing service rather than Ledger.
+
+### SDK (Python)
 
 ```bash
-cd contracts
-cargo build --target wasm32-unknown-unknown --release
-stellar contract deploy --wasm target/wasm32-unknown-unknown/release/agent_wallet_factory.wasm --network testnet
+pip install stellaragent
 ```
+
+```python
+from stellaragent import StellarAgent, SpendLimit, PayForAPIParams
+
+agent = StellarAgent.create(
+    network="testnet",
+    spend_limit=SpendLimit(amount="10", asset="USDC", period="hourly"),
+)
+
+agent.pay_for_api(
+    PayForAPIParams(
+        endpoint="https://api.example.com/inference",
+        amount="0.001",
+        asset="USDC",
+    )
+)
+```
+
+The Python SDK's deterministic math is a strict semantic port of the
+TypeScript one — both are verified byte-identical against
+[643 shared fixtures](fixtures/determinism.json) as a required CI check, so a
+mixed TS/Python agent fleet cannot disagree about a bid score. See
+[python/README.md](python/README.md).
+
+### Contracts (Rust/Soroban)
+
+There are seven contracts, and four of them need initializing in a specific
+order before three others can be wired to them — so deploy them with the
+script rather than by hand:
+
+```bash
+pnpm deploy:contracts --network testnet --source alice
+```
+
+It builds every WASM, deploys, initializes, cross-wires, and writes
+`deployments/testnet.json` plus a matching `.env` block. Full runbook:
+[docs/deployment.md](docs/deployment.md).
 
 ### Dashboard
 

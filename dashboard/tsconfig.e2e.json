@@ -1,0 +1,14 @@
+{
+  // Playwright specs and the Playwright config run in Node, not the browser
+  // bundle, so they get Node globals — which the app tsconfig deliberately
+  // withholds. `pnpm typecheck` runs both configs.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "noEmit": true
+  },
+  "include": ["e2e", "playwright.config.ts"]
+}

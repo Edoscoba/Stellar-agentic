@@ -1,0 +1,110 @@
+name: Deploy contracts (testnet)
+
+# Manual dispatch only, deliberately.
+#
+# `stellar contract deploy` always mints a NEW contract ID — there is no
+# in-place upgrade — so every run orphans all existing testnet state:
+# channels, escrow jobs, and rate limits. Running that on each push to `main`
+# would silently break anything pointed at the previous deployment. See
+# docs/deployment.md.
+on:
+  workflow_dispatch:
+    inputs:
+      trusted_nodes:
+        description: >-
+          Circuit-breaker trusted nodes, comma-separated. Fewer than 5 deploys
+          a breaker that can never reach quorum.
+        required: false
+        default: ''
+      propose_window:
+        description: Circuit-breaker proposal window, in ledgers
+        required: false
+        default: '720'
+      dry_run:
+        description: Print the command sequence without executing it
+        type: boolean
+        required: false
+        default: false
+
+jobs:
+  deploy:
+    name: Deploy to testnet
+    runs-on: ubuntu-latest
+    environment: testnet
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32v1-none, wasm32-unknown-unknown
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: contracts
+
+      - name: Install Stellar CLI
+        run: |
+          curl -sSfL https://github.com/stellar/stellar-cli/releases/latest/download/stellar-cli-installer.sh \
+            | sh -s -- --to /usr/local/bin
+          stellar --version
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # The deployer secret never reaches the workflow log: it goes straight
+      # into the CLI's own keystore and is referenced by identity name after.
+      - name: Configure deployer identity
+        env:
+          DEPLOYER_SECRET: ${{ secrets.TESTNET_DEPLOYER_SECRET }}
+        run: |
+          if [ -z "$DEPLOYER_SECRET" ]; then
+            echo "::error::TESTNET_DEPLOYER_SECRET is not set for the 'testnet' environment."
+            exit 1
+          fi
+          stellar keys add ci-deployer --secret-key <<< "$DEPLOYER_SECRET"
+          echo "Deployer: $(stellar keys public-key ci-deployer)"
+
+      - name: Deploy
+        run: |
+          pnpm deploy:contracts \
+            --network testnet \
+            --source ci-deployer \
+            --trusted-nodes "${{ inputs.trusted_nodes }}" \
+            --propose-window "${{ inputs.propose_window }}" \
+            ${{ inputs.dry_run && '--dry-run' || '' }}
+
+      - name: Publish addresses to the job summary
+        if: ${{ !inputs.dry_run }}
+        run: |
+          {
+            echo "### Testnet deployment"
+            echo ""
+            echo '```json'
+            cat deployments/testnet.json
+            echo '```'
+            echo ""
+            echo "Update the \`STELLARAGENT_TESTNET_*\` repository secrets from the above."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload deployment config
+        if: ${{ !inputs.dry_run }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: testnet-deployment
+          path: deployments/testnet.json
+          retention-days: 90

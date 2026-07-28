@@ -1,0 +1,82 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "stellaragent"
+version = "0.1.0"
+description = "AI Agent Payment Rails on Stellar — Python SDK"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "StellarAgent Contributors" }]
+keywords = ["stellar", "soroban", "ai-agents", "payments", "blockchain"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+  "Typing :: Typed",
+]
+
+# `stellar-sdk` is the official Python SDK, used for Soroban RPC and
+# transaction building. The deterministic math modules deliberately depend on
+# nothing but the standard library's `decimal` — they are the part that has to
+# stay byte-identical with the TypeScript implementation, so they carry no
+# third-party surface that could change rounding behaviour underneath them.
+dependencies = ["stellar-sdk>=9.0.0,<13"]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7.4",
+  "pytest-cov>=4.1",
+  "mypy>=1.8",
+  "ruff>=0.5",
+]
+
+[project.urls]
+Homepage = "https://github.com/yourusername/stellaragent"
+Documentation = "https://github.com/yourusername/stellaragent/tree/main/python#readme"
+Repository = "https://github.com/yourusername/stellaragent"
+Issues = "https://github.com/yourusername/stellaragent/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/stellaragent"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-ra --strict-markers"
+
+[tool.coverage.run]
+source = ["stellaragent"]
+
+[tool.coverage.report]
+# The math modules are the correctness-critical half of this package and the
+# reason the cross-language fixture suite exists. Mirrors the 100% gate on
+# packages/core/src/math in the TypeScript workspace.
+exclude_lines = ["pragma: no cover", "if TYPE_CHECKING:", "raise NotImplementedError"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+# `_format` / `_quantize` are shared internals of the math port, imported
+# across modules on purpose to keep the TS mapping one-to-one.
+# SIM300 flags `assert CONSTANT == expr` as a Yoda condition; that reads
+# naturally in assertions and rewriting it would hurt clarity.
+ignore = ["E501", "SIM300"]
+
+[tool.mypy]
+python_version = "3.10"
+packages = ["stellaragent"]
+mypy_path = "src"
+strict = true
+warn_unreachable = true
