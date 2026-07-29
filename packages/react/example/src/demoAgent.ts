@@ -1,5 +1,6 @@
 import type {
   ChannelInfo,
+  LedgerCloseEstimate,
   PayForAPIParams,
   RateLimitStatus,
   SpendReport,
@@ -35,7 +36,13 @@ export function createDemoAgent(): StellarAgent {
 
   const agent: Pick<
     StellarAgent,
-    'address' | 'getChannel' | 'getSpendReport' | 'getRateLimitStatus' | 'getJob' | 'payForAPI'
+    | 'address'
+    | 'getChannel'
+    | 'getSpendReport'
+    | 'getRateLimitStatus'
+    | 'getLedgerCloseEstimate'
+    | 'getJob'
+    | 'payForAPI'
   > = {
     address: 'GDEMO7AGENTADDRESSEXAMPLE0000000000000000000000000000000',
 
@@ -50,6 +57,8 @@ export function createDemoAgent(): StellarAgent {
         spentThisPeriod: BigInt(Math.round(state.spent * 1e7)),
         totalSpent: BigInt(Math.round(state.spent * 1e7)),
         active: true,
+        period: 'hourly',
+        periodStartLedger: 1000,
       };
     },
 
@@ -65,6 +74,8 @@ export function createDemoAgent(): StellarAgent {
     async getRateLimitStatus(): Promise<RateLimitStatus> {
       await delay(null, 300);
       return {
+        configured: true,
+        active: true,
         maxPerTx: '5',
         maxPerHour: '20',
         maxPerDay: '100',
@@ -72,7 +83,14 @@ export function createDemoAgent(): StellarAgent {
         spentThisHour: state.spent.toFixed(7),
         spentToday: state.spent.toFixed(7),
         txsThisHour: state.txsThisHour,
+        hourWindowStartLedger: 1000,
+        dayWindowStartLedger: 1000,
       };
+    },
+
+    async getLedgerCloseEstimate(): Promise<LedgerCloseEstimate> {
+      await delay(null, 300);
+      return { currentLedger: 1050, avgLedgerCloseSeconds: 5, observed: true };
     },
 
     async getJob() {
