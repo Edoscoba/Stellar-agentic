@@ -39,12 +39,43 @@ export {
   isWithinSpendLimit,
   remainingBudget,
   DEFAULT_BID_WEIGHTS,
+  // payment-outcome prediction
+  predictPaymentOutcome,
+  isWindowExpired,
+  ledgersRemainingInWindow,
+  LEDGERS_PER_CHANNEL_PERIOD,
+  RATE_LIMIT_LEDGERS_PER_HOUR,
+  RATE_LIMIT_LEDGERS_PER_DAY,
 } from './math/index.js';
 export type {
   AgentBid,
   BidWeights,
   ScoredBid,
 } from './math/bid.js';
+export type {
+  ChannelSpendState,
+  RateLimitSpendState,
+  PredictPaymentOutcomeParams,
+  PaymentPrediction,
+  BlockReason,
+} from './math/predict.js';
+
+// ─── Ledger-window wall-clock estimation ─────────────────────────────────────
+//
+// `RateLimiter`/`PaymentChannel` track their rolling windows in ledger
+// sequence numbers, not timestamps. See ./ledgerTime.ts for why "5s per
+// ledger" is treated as a fallback rather than a hard-coded constant.
+
+export {
+  estimateLedgerCloseSeconds,
+  estimateSecondsRemaining,
+  fetchLedgerCloseEstimate,
+  FALLBACK_LEDGER_CLOSE_SECONDS,
+} from './ledgerTime.js';
+export type { LedgerCloseSample, LedgerCloseEstimate } from './ledgerTime.js';
+
+import { fetchLedgerCloseEstimate } from './ledgerTime.js';
+import type { LedgerCloseEstimate } from './ledgerTime.js';
 
 import type {
   StellarAgentConfig,
@@ -499,11 +530,37 @@ export class StellarAgent {
   }
 
   /**
-   * Get current rate-limit usage alongside the configured limits
+   * Get current rate-limit usage alongside the configured limits.
+   *
+   * `RateLimiter.get_limits` is keyed by an arbitrary agent address, not
+   * necessarily this agent's own — an owner monitoring several agents can
+   * query any of them read-only through one signed-in `StellarAgent`.
+   * Defaults to {@link StellarAgent.address} (checking this agent's own
+   * limits) when omitted.
    */
-  async getRateLimitStatus(): Promise<RateLimitStatus> {
-    // TODO: Query RateLimiter.get_status
+  async getRateLimitStatus(agentAddress: string = this.address): Promise<RateLimitStatus> {
+    // TODO: Query RateLimiter.get_limits(agentAddress) + is_active(agentAddress).
+    // `get_limits` panics on-chain ("no rate limit for agent") when nothing
+    // has been configured — that failure is how `configured: false` below
+    // must be derived, since `is_active` alone can't distinguish "never
+    // configured" from "configured and active" (both return `true`).
+    void agentAddress;
     throw new Error('Not yet implemented');
+  }
+
+  /**
+   * Derive the current ledger sequence and an *estimated* average ledger
+   * close time from a handful of recently observed ledgers via Horizon.
+   *
+   * Ledgers close roughly every 5 seconds, but that figure drifts with
+   * network conditions rather than being contractually fixed — so this
+   * measures it from real recent closes instead of assuming a constant. Used
+   * to convert a `RateLimiter`/`PaymentChannel` ledger-count window (e.g.
+   * "720 ledgers until the hourly window resets") into a human wall-clock
+   * estimate. See `ledgerTime.ts` for the derivation and its caveats.
+   */
+  async getLedgerCloseEstimate(): Promise<LedgerCloseEstimate> {
+    return fetchLedgerCloseEstimate(this.networkConfig.horizonUrl);
   }
 
   // ── Internals ────────────────────────────────────────────────────────────

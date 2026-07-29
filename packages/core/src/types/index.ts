@@ -160,6 +160,16 @@ export interface ChannelInfo {
   spentThisPeriod: bigint;
   totalSpent: bigint;
   active: boolean;
+  /** Reset cadence for `spentThisPeriod`, mirroring `Channel.period` on-chain. */
+  period: SpendPeriod;
+  /**
+   * Ledger sequence at which the current period started, mirroring
+   * `Channel.period_start_ledger`. `PaymentChannel.pay` resets
+   * `spentThisPeriod` to 0 once `currentLedger >= periodStartLedger +
+   * <ledgers for period>` — needed to predict spend-limit outcomes without
+   * a stale `spentThisPeriod` (see `math/predict.ts`).
+   */
+  periodStartLedger: number;
 }
 
 export interface SpendReport {
@@ -224,6 +234,28 @@ export interface RateLimitStatus extends RateLimitConfig {
   spentToday: string;
   /** Transaction count in the current rolling hour */
   txsThisHour: number;
+  /**
+   * Whether `RateLimiter.set_limits` has ever been called for this agent
+   * (mirrors the contract's internal `has_limit` check). When `false`,
+   * every other field on this object is meaningless — `RateLimiter.check`
+   * returns `true` unconditionally for an unconfigured agent, so payments
+   * are unrestricted by the rate limiter (though still subject to a
+   * payment channel's own spend limit, if any). Distinct from `active`:
+   * an agent can be `configured: true, active: false` (killed).
+   */
+  configured: boolean;
+  /**
+   * Mirrors the contract's `RateLimit.active` flag (set by `kill_agent`).
+   * Note this does **not** by itself change what `RateLimiter.check`
+   * returns on-chain today — see `predictPaymentOutcome`'s doc comment —
+   * so treat this as informational (e.g. "killed" badge), not as a
+   * blocking signal on its own.
+   */
+  active: boolean;
+  /** Ledger sequence at which the current hourly window started. */
+  hourWindowStartLedger: number;
+  /** Ledger sequence at which the current daily window started. */
+  dayWindowStartLedger: number;
 }
 
 // ─── Contracts ───────────────────────────────────────────────────────────────
