@@ -110,7 +110,7 @@ impl Escrow {
             created_at: env.ledger().sequence(),
         };
 
-        Self::save_job(&env, job_id, job);
+        Self::save_job(&env, job_id, job.clone());
 
         env.events().publish(
             (
@@ -118,6 +118,10 @@ impl Escrow {
                 soroban_sdk::symbol_short!("created"),
             ),
             (job_id, requester, amount),
+        );
+        env.events().publish(
+            (symbol_short!("state"), symbol_short!("job")),
+            (job_id, job),
         );
 
         job_id
@@ -138,7 +142,7 @@ impl Escrow {
 
         job.worker = Some(worker.clone());
         job.status = JobStatus::InProgress;
-        Self::save_job(&env, job_id, job);
+        Self::save_job(&env, job_id, job.clone());
 
         env.events().publish(
             (
@@ -146,6 +150,10 @@ impl Escrow {
                 soroban_sdk::symbol_short!("accepted"),
             ),
             (job_id, worker),
+        );
+        env.events().publish(
+            (symbol_short!("state"), symbol_short!("job")),
+            (job_id, job),
         );
     }
 
@@ -169,7 +177,7 @@ impl Escrow {
 
         job.result = Some(result);
         job.status = JobStatus::PendingRelease;
-        Self::save_job(&env, job_id, job);
+        Self::save_job(&env, job_id, job.clone());
 
         env.events().publish(
             (
@@ -177,6 +185,10 @@ impl Escrow {
                 soroban_sdk::symbol_short!("result"),
             ),
             (job_id, worker),
+        );
+        env.events().publish(
+            (symbol_short!("state"), symbol_short!("job")),
+            (job_id, job),
         );
     }
 
@@ -220,6 +232,10 @@ impl Escrow {
             ),
             (job_id, worker, job.amount),
         );
+        env.events().publish(
+            (symbol_short!("state"), symbol_short!("job")),
+            (job_id, job),
+        );
     }
 
     /// Requester reclaims funds if deadline passed with no result
@@ -257,6 +273,10 @@ impl Escrow {
             ),
             (job_id, requester, job.amount),
         );
+        env.events().publish(
+            (symbol_short!("state"), symbol_short!("job")),
+            (job_id, job),
+        );
     }
 
     /// Requester raises a dispute — locks funds until arbiter resolves
@@ -276,7 +296,7 @@ impl Escrow {
         }
 
         job.status = JobStatus::Disputed;
-        Self::save_job(&env, job_id, job);
+        Self::save_job(&env, job_id, job.clone());
 
         env.events().publish(
             (
@@ -284,6 +304,10 @@ impl Escrow {
                 soroban_sdk::symbol_short!("disputed"),
             ),
             (job_id, requester),
+        );
+        env.events().publish(
+            (symbol_short!("state"), symbol_short!("job")),
+            (job_id, job),
         );
     }
 

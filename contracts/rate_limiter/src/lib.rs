@@ -83,7 +83,14 @@ impl RateLimiter {
             active: true,
         };
 
-        Self::save_limit(&env, &agent, limit);
+        Self::save_limit(&env, &agent, limit.clone());
+        env.events().publish(
+            (
+                soroban_sdk::symbol_short!("state"),
+                soroban_sdk::symbol_short!("limit"),
+            ),
+            (agent, limit),
+        );
     }
 
     /// Check if a proposed payment passes rate limits.
@@ -141,14 +148,21 @@ impl RateLimiter {
         limit.daily_spend += amount;
         limit.hourly_tx_count += 1;
 
-        Self::save_limit(&env, &agent, limit);
+        Self::save_limit(&env, &agent, limit.clone());
 
         env.events().publish(
             (
                 soroban_sdk::symbol_short!("rl"),
                 soroban_sdk::symbol_short!("recorded"),
             ),
-            (agent, amount),
+            (agent.clone(), amount),
+        );
+        env.events().publish(
+            (
+                soroban_sdk::symbol_short!("state"),
+                soroban_sdk::symbol_short!("limit"),
+            ),
+            (agent, limit),
         );
     }
 
@@ -175,7 +189,14 @@ impl RateLimiter {
         limit.max_per_day = max_per_day;
         limit.max_txs_per_hour = max_txs_per_hour;
 
-        Self::save_limit(&env, &agent, limit);
+        Self::save_limit(&env, &agent, limit.clone());
+        env.events().publish(
+            (
+                soroban_sdk::symbol_short!("state"),
+                soroban_sdk::symbol_short!("limit"),
+            ),
+            (agent, limit),
+        );
     }
 
     /// Emergency kill switch — disable an agent immediately
@@ -189,14 +210,21 @@ impl RateLimiter {
         }
 
         limit.active = false;
-        Self::save_limit(&env, &agent, limit);
+        Self::save_limit(&env, &agent, limit.clone());
 
         env.events().publish(
             (
                 soroban_sdk::symbol_short!("rl"),
                 soroban_sdk::symbol_short!("killed"),
             ),
-            agent,
+            agent.clone(),
+        );
+        env.events().publish(
+            (
+                soroban_sdk::symbol_short!("state"),
+                soroban_sdk::symbol_short!("limit"),
+            ),
+            (agent, limit),
         );
     }
 

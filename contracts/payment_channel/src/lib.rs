@@ -169,7 +169,7 @@ impl PaymentChannel {
             .get(&soroban_sdk::symbol_short!("channels"))
             .unwrap_or(Map::new(&env));
 
-        channels.set(channel_id, channel);
+        channels.set(channel_id, channel.clone());
         env.storage()
             .instance()
             .set(&soroban_sdk::symbol_short!("channels"), &channels);
@@ -180,6 +180,13 @@ impl PaymentChannel {
                 soroban_sdk::symbol_short!("opened"),
             ),
             (channel_id, agent, owner, deposit),
+        );
+        env.events().publish(
+            (
+                soroban_sdk::symbol_short!("state"),
+                soroban_sdk::symbol_short!("channel"),
+            ),
+            (channel_id, channel),
         );
 
         channel_id
@@ -257,6 +264,13 @@ impl PaymentChannel {
                 soroban_sdk::symbol_short!("paid"),
             ),
             (channel_id, agent, recipient, amount, memo),
+        );
+        env.events().publish(
+            (
+                soroban_sdk::symbol_short!("state"),
+                soroban_sdk::symbol_short!("channel"),
+            ),
+            (channel_id, channel),
         );
     }
 
@@ -404,6 +418,13 @@ impl PaymentChannel {
                 channel_id, agent, recipient, amount, dest_token, received, memo,
             ),
         );
+        env.events().publish(
+            (
+                soroban_sdk::symbol_short!("state"),
+                soroban_sdk::symbol_short!("channel"),
+            ),
+            (channel_id, channel),
+        );
 
         received
     }
@@ -464,6 +485,13 @@ impl PaymentChannel {
                 soroban_sdk::symbol_short!("closed"),
             ),
             (channel_id, owner),
+        );
+        env.events().publish(
+            (
+                soroban_sdk::symbol_short!("state"),
+                soroban_sdk::symbol_short!("channel"),
+            ),
+            (channel_id, channel),
         );
     }
 
