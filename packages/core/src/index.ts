@@ -43,12 +43,24 @@ export {
   isWithinSpendLimit,
   remainingBudget,
   DEFAULT_BID_WEIGHTS,
+  // bid attestation
+  attestRankBids,
+  verifyBidAttestation,
 } from './math/index.js';
 export type {
   AgentBid,
   BidWeights,
   ScoredBid,
 } from './math/bid.js';
+export type {
+  BidAttestation,
+  AttestRankBidsOptions,
+  AttestedRanking,
+  ScorerKeyRecord,
+  ScorerKeyDirectory,
+  VerifyBidAttestationOptions,
+  BidAttestationVerification,
+} from './math/attestation.js';
 
 import type {
   StellarAgentConfig,
@@ -676,7 +688,13 @@ export class StellarAgent {
   }
 
   /**
-   * Get current rate-limit usage alongside the configured limits
+   * Get current rate-limit usage alongside the configured limits.
+   *
+   * `RateLimiter.get_limits` is keyed by an arbitrary agent address, not
+   * necessarily this agent's own — an owner monitoring several agents can
+   * query any of them read-only through one signed-in `StellarAgent`.
+   * Defaults to {@link StellarAgent.address} (checking this agent's own
+   * limits) when omitted.
    */
   async getRateLimitStatus(): Promise<RateLimitStatus> {
     const value = this.asRecord((await this.invokeContract(
@@ -694,6 +712,21 @@ export class StellarAgent {
       spentToday: fromStroops(this.asBigInt(value.daily_spend)),
       txsThisHour: this.asNumber(value.hourly_tx_count),
     };
+  }
+
+  /**
+   * Derive the current ledger sequence and an *estimated* average ledger
+   * close time from a handful of recently observed ledgers via Horizon.
+   *
+   * Ledgers close roughly every 5 seconds, but that figure drifts with
+   * network conditions rather than being contractually fixed — so this
+   * measures it from real recent closes instead of assuming a constant. Used
+   * to convert a `RateLimiter`/`PaymentChannel` ledger-count window (e.g.
+   * "720 ledgers until the hourly window resets") into a human wall-clock
+   * estimate. See `ledgerTime.ts` for the derivation and its caveats.
+   */
+  async getLedgerCloseEstimate(): Promise<LedgerCloseEstimate> {
+    return fetchLedgerCloseEstimate(this.networkConfig.horizonUrl);
   }
 
   // ── Internals ────────────────────────────────────────────────────────────

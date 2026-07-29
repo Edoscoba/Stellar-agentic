@@ -14,6 +14,8 @@ const channel: ChannelInfo = {
   spentThisPeriod: 250_0000000n,
   totalSpent: 750_0000000n,
   active: true,
+  period: 'hourly',
+  periodStartLedger: 1000,
 };
 
 // `@testing-library/react`'s `waitFor` polls via `setTimeout`, which is

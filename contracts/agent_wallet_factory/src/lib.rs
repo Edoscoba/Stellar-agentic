@@ -106,7 +106,7 @@ impl AgentWalletFactory {
             .get(&symbol_short!("agents"))
             .unwrap_or(Map::new(&env));
 
-        agents.set(agent_id, agent);
+        agents.set(agent_id, agent.clone());
 
         env.storage()
             .instance()
@@ -119,6 +119,10 @@ impl AgentWalletFactory {
         env.events().publish(
             (symbol_short!("factory"), symbol_short!("created")),
             (agent_id, agent_address, owner),
+        );
+        env.events().publish(
+            (symbol_short!("state"), symbol_short!("agent")),
+            (agent_id, agent),
         );
 
         agent_id
@@ -150,6 +154,10 @@ impl AgentWalletFactory {
             (symbol_short!("factory"), symbol_short!("deactiv")),
             (agent_id, owner),
         );
+        env.events().publish(
+            (symbol_short!("state"), symbol_short!("agent")),
+            (agent_id, agent),
+        );
     }
 
     /// Reactivate a previously deactivated agent.
@@ -169,7 +177,7 @@ impl AgentWalletFactory {
         }
 
         agent.active = true;
-        agents.set(agent_id, agent);
+        agents.set(agent_id, agent.clone());
         env.storage()
             .instance()
             .set(&symbol_short!("agents"), &agents);
@@ -177,6 +185,10 @@ impl AgentWalletFactory {
         env.events().publish(
             (symbol_short!("factory"), symbol_short!("reactiv")),
             (agent_id, owner),
+        );
+        env.events().publish(
+            (symbol_short!("state"), symbol_short!("agent")),
+            (agent_id, agent),
         );
     }
 
@@ -191,10 +203,14 @@ impl AgentWalletFactory {
 
         let mut agent = agents.get(agent_id).expect("agent not found");
         agent.total_ops += 1;
-        agents.set(agent_id, agent);
+        agents.set(agent_id, agent.clone());
         env.storage()
             .instance()
             .set(&symbol_short!("agents"), &agents);
+        env.events().publish(
+            (symbol_short!("state"), symbol_short!("agent")),
+            (agent_id, agent),
+        );
     }
 
     // ── Queries ──────────────────────────────────────────────────────────────
