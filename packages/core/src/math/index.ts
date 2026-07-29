@@ -12,4 +12,4 @@
 
 export * from './fixed-point.js';
 export * from './bid.js';
-export * from './predict.js';
+export * from './attestation.js';

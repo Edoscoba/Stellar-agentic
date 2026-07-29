@@ -39,13 +39,9 @@ export {
   isWithinSpendLimit,
   remainingBudget,
   DEFAULT_BID_WEIGHTS,
-  // payment-outcome prediction
-  predictPaymentOutcome,
-  isWindowExpired,
-  ledgersRemainingInWindow,
-  LEDGERS_PER_CHANNEL_PERIOD,
-  RATE_LIMIT_LEDGERS_PER_HOUR,
-  RATE_LIMIT_LEDGERS_PER_DAY,
+  // bid attestation
+  attestRankBids,
+  verifyBidAttestation,
 } from './math/index.js';
 export type {
   AgentBid,
@@ -53,29 +49,14 @@ export type {
   ScoredBid,
 } from './math/bid.js';
 export type {
-  ChannelSpendState,
-  RateLimitSpendState,
-  PredictPaymentOutcomeParams,
-  PaymentPrediction,
-  BlockReason,
-} from './math/predict.js';
-
-// ─── Ledger-window wall-clock estimation ─────────────────────────────────────
-//
-// `RateLimiter`/`PaymentChannel` track their rolling windows in ledger
-// sequence numbers, not timestamps. See ./ledgerTime.ts for why "5s per
-// ledger" is treated as a fallback rather than a hard-coded constant.
-
-export {
-  estimateLedgerCloseSeconds,
-  estimateSecondsRemaining,
-  fetchLedgerCloseEstimate,
-  FALLBACK_LEDGER_CLOSE_SECONDS,
-} from './ledgerTime.js';
-export type { LedgerCloseSample, LedgerCloseEstimate } from './ledgerTime.js';
-
-import { fetchLedgerCloseEstimate } from './ledgerTime.js';
-import type { LedgerCloseEstimate } from './ledgerTime.js';
+  BidAttestation,
+  AttestRankBidsOptions,
+  AttestedRanking,
+  ScorerKeyRecord,
+  ScorerKeyDirectory,
+  VerifyBidAttestationOptions,
+  BidAttestationVerification,
+} from './math/attestation.js';
 
 import type {
   StellarAgentConfig,
