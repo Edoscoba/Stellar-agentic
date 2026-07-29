@@ -78,6 +78,11 @@ export interface StellarAgentConfig {
    */
   contracts?: Partial<ContractAddresses>;
   /**
+   * Token contract IDs keyed by friendly asset code (for example `USDC`).
+   * `XLM` resolves automatically, and a `C...` ID may be passed directly.
+   */
+  assetContracts?: Record<string, string>;
+  /**
    * Skip the deployed-contracts check in `StellarAgent.create()`.
    *
    * By default an agent refuses to be created against contract addresses
@@ -106,7 +111,7 @@ export interface AgentInfo {
 
 export interface OpenChannelParams {
   /**
-   * Token to use for payments (defaults to USDC). This remains the
+   * Token to use for payments (defaults to XLM). This remains the
    * channel's single funding/settlement asset — `limitPerPeriod` is always
    * denominated in it, even for cross-asset payments made via
    * `payForAPI`'s `destAsset` (see `PayForAPIParams`). Cross-asset support
@@ -130,6 +135,11 @@ export interface PayForAPIParams {
   asset?: string;
   /** Channel ID to use (uses default if not specified) */
   channelId?: bigint;
+  /**
+   * Stellar account or contract receiving the payment. Defaults to the
+   * agent address for compatibility; real API payments should set this.
+   */
+  recipient?: string;
   /**
    * Asset the recipient should actually receive, if different from the
    * channel's settlement asset (`asset`) — e.g. a channel funded in USDC

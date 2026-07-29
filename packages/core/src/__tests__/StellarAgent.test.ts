@@ -404,26 +404,42 @@ describe('payForAPI — validation guards', () => {
     ).rejects.toThrow('destAsset and minReceived must be set together');
   });
 
-  it('accepts both together, falling through to the unimplemented invocation', async () => {
+  it('routes a complete cross-asset request through pay_with_conversion', async () => {
     withActiveChannel(agent);
-    vi.spyOn(console, 'log').mockImplementation(() => {});
-    await expect(
-      agent.payForAPI({
-        endpoint: 'https://api.example.com',
-        amount: '0.001',
-        asset: 'USDC',
-        destAsset: 'XLM',
-        minReceived: '0.009',
-      }),
-    ).rejects.toThrow('Not yet implemented');
+    const invoke = vi.spyOn(
+      agent as unknown as { invokeContract: (...args: unknown[]) => Promise<unknown> },
+      'invokeContract',
+    ).mockResolvedValue({ value: 90_000n, tx: { hash: 'abc', success: true } });
+    await expect(agent.payForAPI({
+      endpoint: 'https://api.example.com',
+      amount: '0.001',
+      asset: 'USDC',
+      destAsset: 'XLM',
+      minReceived: '0.009',
+    })).resolves.toEqual({ hash: 'abc', success: true });
+    expect(invoke).toHaveBeenCalledWith(
+      DEPLOYED_CONTRACTS.paymentChannel,
+      'pay_with_conversion',
+      expect.any(Array),
+    );
   });
 
-  it('accepts neither, falling through to the unimplemented invocation', async () => {
+  it('routes a same-asset request through pay', async () => {
     withActiveChannel(agent);
-    vi.spyOn(console, 'log').mockImplementation(() => {});
-    await expect(
-      agent.payForAPI({ endpoint: 'https://api.example.com', amount: '0.001', asset: 'USDC' }),
-    ).rejects.toThrow('Not yet implemented');
+    const invoke = vi.spyOn(
+      agent as unknown as { invokeContract: (...args: unknown[]) => Promise<unknown> },
+      'invokeContract',
+    ).mockResolvedValue({ value: undefined, tx: { hash: 'def', success: true } });
+    await expect(agent.payForAPI({
+      endpoint: 'https://api.example.com',
+      amount: '0.001',
+      asset: 'USDC',
+    })).resolves.toEqual({ hash: 'def', success: true });
+    expect(invoke).toHaveBeenCalledWith(
+      DEPLOYED_CONTRACTS.paymentChannel,
+      'pay',
+      expect.any(Array),
+    );
   });
 });
 
@@ -487,45 +503,5 @@ describe('getBalance', () => {
     stubHorizon(async () => ({ balances: [{ asset_type: 'native', balance: '5' }] }));
     await agent.getBalance();
     expect(secret).not.toHaveBeenCalled();
-  });
-});
-
-// ─── Unimplemented surface ───────────────────────────────────────────────────
-
-describe('unimplemented contract methods', () => {
-  let agent: StellarAgent;
-  beforeEach(async () => {
-    agent = await createAgent({ network: 'testnet', secretKey: TEST_SECRET });
-    vi.spyOn(console, 'log').mockImplementation(() => {});
-  });
-
-  // These all await real Soroban invocation. The assertions pin the current
-  // contract — a clear throw, never a silent no-op or an undefined return —
-  // so that implementing them is a deliberate, test-visible change.
-  it('openChannel throws a descriptive error', async () => {
-    await expect(
-      agent.openChannel({ deposit: '10', limitPerPeriod: '1', period: 'hourly' }),
-    ).rejects.toThrow(/Not yet implemented/);
-  });
-
-  it('requestWork throws a descriptive error', async () => {
-    await expect(
-      agent.requestWork({ workerAgent: TEST_PUBLIC, task: 'summarise', escrowAmount: '0.05' }),
-    ).rejects.toThrow(/Not yet implemented/);
-  });
-
-  it.each([
-    ['acceptJob', () => agent.acceptJob(1n)],
-    ['submitResult', () => agent.submitResult(1n, 'done')],
-    ['releasePayment', () => agent.releasePayment(1n)],
-    ['setRateLimits', () =>
-      agent.setRateLimits({ maxPerTx: '1', maxPerHour: '10', maxPerDay: '100', maxTxsPerHour: 5 })],
-    ['checkRateLimit', () => agent.checkRateLimit('1')],
-    ['getSpendReport', () => agent.getSpendReport()],
-    ['getChannel', () => agent.getChannel(1n)],
-    ['getJob', () => agent.getJob(1n)],
-    ['getRateLimitStatus', () => agent.getRateLimitStatus()],
-  ])('%s rejects rather than returning undefined', async (_name, call) => {
-    await expect(call()).rejects.toThrow(/Not yet implemented/);
   });
 });
