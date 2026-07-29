@@ -340,6 +340,10 @@ describe('secret containment', () => {
 // ─── Parity between the two paths ────────────────────────────────────────────
 
 describe('signer path vs keypair path parity', () => {
+  type InvocationInternals = {
+    invokeContract(...args: unknown[]): Promise<unknown>;
+    getLatestLedger(): Promise<number>;
+  };
   let viaSigner: StellarAgent;
   let viaSecret: StellarAgent;
 
@@ -362,6 +366,10 @@ describe('signer path vs keypair path parity', () => {
 
   it('openChannel behaves identically on both', async () => {
     const params = { deposit: '10', limitPerPeriod: '1', period: 'hourly' } as const;
+    vi.spyOn(viaSigner as unknown as InvocationInternals, 'invokeContract')
+      .mockResolvedValue({ value: 1n, tx: { hash: 'a', success: true } });
+    vi.spyOn(viaSecret as unknown as InvocationInternals, 'invokeContract')
+      .mockResolvedValue({ value: 1n, tx: { hash: 'a', success: true } });
     const fromSigner = await viaSigner.openChannel(params).catch((e: Error) => e.message);
     const fromSecret = await viaSecret.openChannel(params).catch((e: Error) => e.message);
     expect(fromSigner).toBe(fromSecret);
@@ -390,6 +398,12 @@ describe('signer path vs keypair path parity', () => {
   });
 
   it('the full escrow surface behaves identically on both', async () => {
+    vi.spyOn(viaSigner as unknown as InvocationInternals, 'invokeContract')
+      .mockRejectedValue(new Error('rpc offline'));
+    vi.spyOn(viaSecret as unknown as InvocationInternals, 'invokeContract')
+      .mockRejectedValue(new Error('rpc offline'));
+    vi.spyOn(viaSigner as unknown as InvocationInternals, 'getLatestLedger').mockResolvedValue(1);
+    vi.spyOn(viaSecret as unknown as InvocationInternals, 'getLatestLedger').mockResolvedValue(1);
     const probes: [string, (a: StellarAgent) => Promise<unknown>][] = [
       ['requestWork', (a) => a.requestWork({ workerAgent: TEST_PUBLIC, task: 't', escrowAmount: '1' })],
       ['acceptJob', (a) => a.acceptJob(1n)],

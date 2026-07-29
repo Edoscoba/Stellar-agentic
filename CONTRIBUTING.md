@@ -120,12 +120,15 @@ network and the contracts deployed:
 
 ```bash
 stellar network start local
+pnpm deploy:contracts --network local --source alice
+# export the STELLARAGENT_LOCAL_* values printed by the deploy command
 STELLAR_LOCAL_INTEGRATION=1 pnpm --filter @stellaragent/core test
 ```
 
-Most of its lifecycle assertions are still `it.todo` — they are the acceptance
-criteria for the in-flight "real Soroban invocation" work, since
-`openChannel`/`payForAPI`/`requestWork` are stubs today.
+The suite funds isolated owner/worker accounts through local friendbot and
+exercises agent registration, the complete payment-channel lifecycle,
+rate-limit queries, and the complete escrow lifecycle. It uses the native XLM
+asset contract, so no custom token deployment is required.
 
 ### Rust contracts
 

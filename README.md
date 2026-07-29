@@ -88,14 +88,22 @@ import { StellarAgent } from '@stellaragent/sdk';
 
 const agent = await StellarAgent.create({
   network: 'testnet',
-  spendLimit: { amount: '10', asset: 'USDC', period: 'hourly' },
+});
+
+await agent.createAgentWallet('research-agent');
+await agent.openChannel({
+  token: 'XLM',
+  deposit: '10',
+  limitPerPeriod: '5',
+  period: 'hourly',
 });
 
 // Pay for an API call
 await agent.payForAPI({
   endpoint: 'https://api.example.com/inference',
+  recipient: 'G...API_PROVIDER_ADDRESS',
   amount: '0.001',
-  asset: 'USDC',
+  asset: 'XLM',
 });
 
 // Agent-to-agent escrow job
@@ -103,9 +111,14 @@ const job = await agent.requestWork({
   workerAgent: 'G...AGENT_ADDRESS',
   task: 'Summarize this document',
   escrowAmount: '0.05',
-  asset: 'USDC',
+  asset: 'XLM',
 });
 ```
+
+Contract IDs must be configured through `contracts` or the
+`STELLARAGENT_<NETWORK>_*` environment variables described in the deployment
+guide. Friendly non-XLM asset codes also need an `assetContracts` mapping to
+their deployed Stellar Asset Contract ID.
 
 #### Production: keep the key out of the agent process
 
