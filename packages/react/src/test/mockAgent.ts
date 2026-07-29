@@ -3,6 +3,7 @@ import { StellarAgent } from '@stellaragent/core';
 import type {
   ChannelInfo,
   JobInfo,
+  LedgerCloseEstimate,
   PayForAPIParams,
   RateLimitStatus,
   SpendReport,
@@ -13,7 +14,8 @@ export interface MockAgentOverrides {
   getSpendReport?: () => Promise<SpendReport>;
   getChannel?: (channelId: bigint) => Promise<ChannelInfo>;
   getJob?: (jobId: bigint) => Promise<JobInfo>;
-  getRateLimitStatus?: () => Promise<RateLimitStatus>;
+  getRateLimitStatus?: (agentAddress: string) => Promise<RateLimitStatus>;
+  getLedgerCloseEstimate?: () => Promise<LedgerCloseEstimate>;
   payForAPI?: (params: PayForAPIParams) => Promise<TxResult>;
 }
 
@@ -34,6 +36,9 @@ export function createMockAgent(overrides: MockAgentOverrides = {}): StellarAgen
     getChannel: vi.fn(overrides.getChannel ?? unmocked('getChannel')),
     getJob: vi.fn(overrides.getJob ?? unmocked('getJob')),
     getRateLimitStatus: vi.fn(overrides.getRateLimitStatus ?? unmocked('getRateLimitStatus')),
+    getLedgerCloseEstimate: vi.fn(
+      overrides.getLedgerCloseEstimate ?? unmocked('getLedgerCloseEstimate'),
+    ),
     payForAPI: vi.fn(overrides.payForAPI ?? unmocked('payForAPI')),
   };
   return mock as unknown as StellarAgent;

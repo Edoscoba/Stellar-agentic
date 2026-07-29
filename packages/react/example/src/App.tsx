@@ -5,6 +5,7 @@ import {
   usePayForAPI,
   useRateLimitStatus,
   useSpendReport,
+  useStellarAgent,
 } from '@stellaragent/react';
 import { createDemoAgent, DEMO_CHANNEL_ID } from './demoAgent.js';
 
@@ -55,11 +56,12 @@ export function App() {
 }
 
 function Dashboard() {
+  const { agent } = useStellarAgent();
   return (
     <div className="dashboard">
       <ChannelCard />
       <SpendReportCard />
-      <RateLimitCard />
+      {agent && <RateLimitCard agentAddress={agent.address} />}
       <PayForAPICard />
     </div>
   );
@@ -109,8 +111,8 @@ function SpendReportCard() {
   );
 }
 
-function RateLimitCard() {
-  const { data, status, error } = useRateLimitStatus({ intervalMs: 4000 });
+function RateLimitCard({ agentAddress }: { agentAddress: string }) {
+  const { data, status, error } = useRateLimitStatus(agentAddress, { intervalMs: 4000 });
 
   return (
     <section className="card">
@@ -120,12 +122,14 @@ function RateLimitCard() {
         <dl>
           <dt>Spent this hour</dt>
           <dd>
-            {data.spentThisHour} / {data.maxPerHour}
+            {data.rateLimit.spentThisHour} / {data.rateLimit.maxPerHour}
           </dd>
           <dt>Txs this hour</dt>
           <dd>
-            {data.txsThisHour} / {data.maxTxsPerHour}
+            {data.rateLimit.txsThisHour} / {data.rateLimit.maxTxsPerHour}
           </dd>
+          <dt>Hourly window resets in</dt>
+          <dd>~{Math.round(data.hourWindow.estimatedSecondsRemaining)}s (estimate)</dd>
         </dl>
       )}
     </section>

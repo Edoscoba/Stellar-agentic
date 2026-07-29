@@ -490,6 +490,65 @@ describe('getBalance', () => {
   });
 });
 
+// ─── getRateLimitStatus(agentAddress) ────────────────────────────────────────
+
+describe('getRateLimitStatus — agentAddress defaulting', () => {
+  it('still rejects (Soroban invocation not yet implemented) with no argument', async () => {
+    const agent = await createAgent({ network: 'testnet', secretKey: TEST_SECRET });
+    await expect(agent.getRateLimitStatus()).rejects.toThrow(/Not yet implemented/);
+  });
+
+  it('still rejects the same way when checking a different agent address', async () => {
+    // RateLimiter.get_limits is keyed by an arbitrary agent address, not
+    // necessarily this StellarAgent's own — an owner can look up any
+    // agent's configured limits read-only.
+    const agent = await createAgent({ network: 'testnet', secretKey: TEST_SECRET });
+    await expect(agent.getRateLimitStatus('GSOMEOTHERAGENTADDRESS')).rejects.toThrow(
+      /Not yet implemented/,
+    );
+  });
+});
+
+// ─── getLedgerCloseEstimate ───────────────────────────────────────────────────
+
+describe('getLedgerCloseEstimate', () => {
+  it('derives currentLedger and an observed average from recent Horizon ledgers', async () => {
+    const agent = await createAgent({ network: 'testnet', secretKey: TEST_SECRET });
+    stubFetch(
+      async () =>
+        new Response(
+          JSON.stringify({
+            _embedded: {
+              records: [
+                { sequence: 202, closed_at: '2024-01-01T00:00:10Z' },
+                { sequence: 201, closed_at: '2024-01-01T00:00:05Z' },
+                { sequence: 200, closed_at: '2024-01-01T00:00:00Z' },
+              ],
+            },
+          }),
+          { status: 200 },
+        ),
+    );
+
+    const estimate = await agent.getLedgerCloseEstimate();
+    expect(estimate).toEqual({ currentLedger: 202, avgLedgerCloseSeconds: 5, observed: true });
+  });
+
+  it('queries this network config\'s own Horizon URL', async () => {
+    const agent = await createAgent({ network: 'testnet', secretKey: TEST_SECRET });
+    const spy = stubFetch(
+      async () =>
+        new Response(
+          JSON.stringify({ _embedded: { records: [{ sequence: 1, closed_at: '2024-01-01T00:00:00Z' }] } }),
+          { status: 200 },
+        ),
+    );
+
+    await agent.getLedgerCloseEstimate();
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining('horizon-testnet.stellar.org/ledgers'));
+  });
+});
+
 // ─── Unimplemented surface ───────────────────────────────────────────────────
 
 describe('unimplemented contract methods', () => {

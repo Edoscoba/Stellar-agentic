@@ -8,7 +8,13 @@ export {
 
 export { useChannel } from './hooks/useChannel.js';
 export { useJob } from './hooks/useJob.js';
-export { useRateLimitStatus } from './hooks/useRateLimitStatus.js';
+export {
+  useRateLimitStatus,
+  type UseRateLimitStatusOptions,
+  type UseRateLimitStatusData,
+  type UseRateLimitStatusResult,
+  type RateLimitWindowEstimate,
+} from './hooks/useRateLimitStatus.js';
 export { useSpendReport, type UseSpendReportResult } from './hooks/useSpendReport.js';
 export {
   usePayForAPI,
