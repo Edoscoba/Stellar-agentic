@@ -39,12 +39,24 @@ export {
   isWithinSpendLimit,
   remainingBudget,
   DEFAULT_BID_WEIGHTS,
+  // bid attestation
+  attestRankBids,
+  verifyBidAttestation,
 } from './math/index.js';
 export type {
   AgentBid,
   BidWeights,
   ScoredBid,
 } from './math/bid.js';
+export type {
+  BidAttestation,
+  AttestRankBidsOptions,
+  AttestedRanking,
+  ScorerKeyRecord,
+  ScorerKeyDirectory,
+  VerifyBidAttestationOptions,
+  BidAttestationVerification,
+} from './math/attestation.js';
 
 import type {
   StellarAgentConfig,
