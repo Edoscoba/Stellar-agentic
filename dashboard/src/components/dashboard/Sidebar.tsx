@@ -9,6 +9,7 @@ import {
   Settings,
   ExternalLink,
   Zap,
+  BellDot,
 } from 'lucide-react';
 import { clsx } from 'clsx';
 
@@ -17,6 +18,7 @@ const NAV_ITEMS = [
   { to: '/agents', icon: Bot, label: 'Agents' },
   { to: '/payments', icon: ArrowLeftRight, label: 'Payments' },
   { to: '/jobs', icon: Briefcase, label: 'Escrow Jobs' },
+  { to: '/alerts', icon: BellDot, label: 'Alerts' },
   { to: '/limits', icon: ShieldCheck, label: 'Rate Limits' },
   { to: '/settings', icon: Settings, label: 'Settings' },
 ];
