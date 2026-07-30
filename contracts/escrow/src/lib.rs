@@ -16,6 +16,11 @@ use soroban_sdk::{
     Vec,
 };
 
+#[cfg(test)]
+mod test;
+
+const DISPUTE_TIMEOUT_LEDGERS: u32 = 14400;
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 #[contracttype]
@@ -54,6 +59,7 @@ pub struct Job {
     pub result: Option<Bytes>,
     /// Ledger deadline — refund available after this
     pub deadline_ledger: u32,
+    pub dispute_deadline_ledger: Option<u32>,
     pub status: JobStatus,
     pub created_at: u32,
 }
@@ -106,6 +112,7 @@ impl Escrow {
             task_description,
             result: None,
             deadline_ledger,
+            dispute_deadline_ledger: None,
             status: JobStatus::Open,
             created_at: env.ledger().sequence(),
         };
@@ -200,19 +207,12 @@ impl Escrow {
 
         let mut job = Self::load_job(&env, job_id);
 
-        if job.status != JobStatus::PendingRelease && job.status != JobStatus::Disputed {
-            panic!("job not pending release or disputed");
+        if job.status != JobStatus::PendingRelease {
+            panic!("job not pending release");
         }
 
-        // Only requester or arbiter can release
-        let is_requester = job.requester == releaser;
-        let is_arbiter = job
-            .arbiter
-            .as_ref()
-            .map(|a| *a == releaser)
-            .unwrap_or(false);
-
-        if !is_requester && !is_arbiter {
+        // Only requester can release
+        if job.requester != releaser {
             panic!("not authorized to release");
         }
 
@@ -250,14 +250,22 @@ impl Escrow {
 
         let refundable = job.status == JobStatus::Open
             || job.status == JobStatus::InProgress
-            || job.status == JobStatus::PendingRelease;
+            || job.status == JobStatus::PendingRelease
+            || job.status == JobStatus::Disputed;
 
         if !refundable {
             panic!("job cannot be refunded");
         }
 
-        if env.ledger().sequence() < job.deadline_ledger && job.status != JobStatus::Open {
-            panic!("deadline not reached yet");
+        if job.status == JobStatus::Disputed {
+            let dispute_deadline = job.dispute_deadline_ledger.expect("missing dispute deadline");
+            if env.ledger().sequence() <= dispute_deadline {
+                panic!("dispute deadline not reached yet");
+            }
+        } else {
+            if env.ledger().sequence() < job.deadline_ledger && job.status != JobStatus::Open {
+                panic!("deadline not reached yet");
+            }
         }
 
         let token_client = token::Client::new(&env, &job.token);
@@ -296,6 +304,7 @@ impl Escrow {
         }
 
         job.status = JobStatus::Disputed;
+        job.dispute_deadline_ledger = Some(env.ledger().sequence() + DISPUTE_TIMEOUT_LEDGERS);
         Self::save_job(&env, job_id, job.clone());
 
         env.events().publish(
@@ -304,6 +313,48 @@ impl Escrow {
                 soroban_sdk::symbol_short!("disputed"),
             ),
             (job_id, requester),
+        );
+        env.events().publish(
+            (symbol_short!("state"), symbol_short!("job")),
+            (job_id, job),
+        );
+    }
+
+    /// Arbiter resolves a dispute
+    pub fn resolve_dispute(env: Env, arbiter: Address, job_id: u64, favor_worker: bool) {
+        Self::require_not_paused(&env);
+        arbiter.require_auth();
+
+        let mut job = Self::load_job(&env, job_id);
+
+        if job.status != JobStatus::Disputed {
+            panic!("job not disputed");
+        }
+
+        let job_arbiter = job.arbiter.as_ref().expect("no arbiter set");
+        if *job_arbiter != arbiter {
+            panic!("not the arbiter");
+        }
+
+        let token_client = token::Client::new(&env, &job.token);
+
+        if favor_worker {
+            let worker = job.worker.clone().expect("no worker");
+            token_client.transfer(&env.current_contract_address(), &worker, &job.amount);
+            job.status = JobStatus::Completed;
+        } else {
+            token_client.transfer(&env.current_contract_address(), &job.requester, &job.amount);
+            job.status = JobStatus::Refunded;
+        }
+
+        Self::save_job(&env, job_id, job.clone());
+
+        env.events().publish(
+            (
+                soroban_sdk::symbol_short!("escrow"),
+                soroban_sdk::symbol_short!("resolved"),
+            ),
+            (job_id, arbiter, favor_worker),
         );
         env.events().publish(
             (symbol_short!("state"), symbol_short!("job")),
