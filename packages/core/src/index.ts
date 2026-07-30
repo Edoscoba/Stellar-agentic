@@ -111,8 +111,11 @@ export type {
 } from './types/index.js';
 
 // ─── Circuit Breaker (emergency pause) ────────────────────────────────────────
-export { CircuitBreaker } from './circuitBreaker.js';
-export type { CircuitBreakerOptions } from './circuitBreaker.js';
+export {
+  CircuitBreaker,
+  asPublicAddress,
+} from './circuitBreaker.js';
+export type { CircuitBreakerOptions, PublicAddress } from './circuitBreaker.js';
 
 // ─── Contract address resolution ─────────────────────────────────────────────
 //

@@ -12,18 +12,14 @@
  *                               is reached on unpause proposals.
  *   - `is_paused()`           – view function returning the current pause state.
  *
- * The trusted-node set itself lives on-chain in the contract (see
- * `set_trusted_nodes`, admin-only). This wrapper does **not** maintain its
- * own list of trusted signers — a client-side allow-list of secret keys is
- * exactly the anti-pattern this contract exists to avoid. Whether a given
- * signer is actually trusted is enforced by the contract at
- * `propose_pause` / `propose_unpause` time; the SDK's job is only to submit
- * the transaction and surface the contract's own errors.
+ * The trusted-node set lives on-chain in the contract (see `set_trusted_nodes`,
+ * admin-only). This wrapper does **not** maintain a client-side allow-list of
+ * signers — a hardcoded list of secret keys is exactly the anti-pattern this
+ * contract exists to avoid. Whether a signer is trusted is enforced by the
+ * contract at `propose_pause` / `propose_unpause` time via `require_auth()`.
  *
- * This wrapper provides a thin, promise‑based API that signs and submits
- * transactions using the `@stellar/stellar-sdk`. It keeps the core package
- * lightweight – the heavy cryptographic logic lives in the SDK dependency.
- * Consumers can inject a custom Soroban RPC server URL via the options.
+ * Consumers pass a secret key only to sign transactions they submit; trusted
+ * node membership is never checked client-side.
  */
 
 import {
@@ -31,57 +27,72 @@ import {
   Contract,
   Keypair,
   Networks,
+  Operation,
   SorobanRpc,
+  StrKey,
   TransactionBuilder,
   BASE_FEE,
   scValToNative,
   xdr,
 } from '@stellar/stellar-sdk';
 
+import { KeypairSigner } from './signer.js';
+
+/** Stellar account public key (`G...`). Secret keys (`S...`) are rejected. */
+export type PublicAddress = string & { readonly __brand: unique symbol };
+
+/**
+ * Parse and validate a Stellar public address. Rejects secret keys so a
+ * trusted-node list can never accidentally hold signing material.
+ */
+export function asPublicAddress(value: string): PublicAddress {
+  if (StrKey.isValidEd25519PublicKey(value)) {
+    return value as PublicAddress;
+  }
+  if (value.startsWith('S')) {
+    throw new Error('Secret keys must not be used where a public address is expected');
+  }
+  throw new Error('Expected a valid Stellar public address (G...)');
+}
+
 export interface CircuitBreakerOptions {
   /**
    * Soroban RPC endpoint (e.g., https://soroban-testnet.stellar.org).
+   * Ignored when `rpc` is provided.
    */
   rpcUrl: string;
-  /**
-   * The contract ID (address) of the deployed CircuitBreaker contract.
-   */
+  /** The contract ID (address) of the deployed CircuitBreaker contract. */
   contractId: string;
-  /**
-   * Network passphrase to sign transactions for. Defaults to testnet.
-   */
+  /** Network passphrase to sign transactions for. Defaults to testnet. */
   networkPassphrase?: string;
+  /** Inject a Soroban RPC client (used by unit tests). */
+  rpc?: SorobanRpc.Server;
 }
 
-/**
- * Helper to load a Keypair from a secret key string.
- */
 function loadKeypair(secret: string): Keypair {
   try {
     return Keypair.fromSecret(secret);
-  } catch (e) {
+  } catch {
     throw new Error('Invalid secret key format');
   }
 }
 
 export class CircuitBreaker {
+  readonly contractId: string;
   private rpcServer: SorobanRpc.Server;
   private contract: Contract;
   private networkPassphrase: string;
 
   constructor(options: CircuitBreakerOptions) {
-    this.rpcServer = new SorobanRpc.Server(options.rpcUrl);
+    this.contractId = options.contractId;
+    this.rpcServer = options.rpc ?? new SorobanRpc.Server(options.rpcUrl);
     this.contract = new Contract(options.contractId);
     this.networkPassphrase = options.networkPassphrase ?? Networks.TESTNET;
   }
 
   /**
    * A trusted node records its approval to pause the system.
-   * Whether `signerSecretKey` actually belongs to a trusted node is
-   * enforced on-chain by the contract — it will reject the call
-   * (`"not a trusted node"`) if it isn't.
-   *
-   * @param signerSecretKey The secret key of the node submitting the proposal.
+   * Whether `signerSecretKey` belongs to a trusted node is enforced on-chain.
    */
   async proposePause(signerSecretKey: string): Promise<void> {
     const keypair = loadKeypair(signerSecretKey);
@@ -89,43 +100,29 @@ export class CircuitBreaker {
     await this.invoke('propose_pause', [nodeAddress], keypair);
   }
 
-  /**
-   * Attempt to execute the pause once enough approvals are recorded.
-   * Callable by any funded account once quorum is reached on-chain — the
-   * security comes from the trusted-node quorum, not from who submits
-   * this transaction.
-   */
+  /** Execute the pause once enough on-chain proposals have been recorded. */
   async executePause(signerSecretKey: string): Promise<void> {
-    const keypair = loadKeypair(signerSecretKey);
-    await this.invoke('execute_pause', [], keypair);
+    await this.invoke('execute_pause', [], loadKeypair(signerSecretKey));
   }
 
-  /**
-   * A trusted node records its approval to unpause the system.
-   */
+  /** A trusted node records its approval to unpause the system. */
   async proposeUnpause(signerSecretKey: string): Promise<void> {
     const keypair = loadKeypair(signerSecretKey);
     const nodeAddress = Address.fromString(keypair.publicKey()).toScVal();
     await this.invoke('propose_unpause', [nodeAddress], keypair);
   }
 
-  /**
-   * Attempt to lift the pause once enough unpause approvals are recorded.
-   */
+  /** Lift the pause once enough on-chain unpause proposals have been recorded. */
   async unpause(signerSecretKey: string): Promise<void> {
-    const keypair = loadKeypair(signerSecretKey);
-    await this.invoke('unpause', [], keypair);
+    await this.invoke('unpause', [], loadKeypair(signerSecretKey));
   }
 
   /**
    * Query the contract to see if the system is currently paused.
    *
-   * Simulating a Soroban call still requires a source account (for fee /
-   * sequence-number bookkeeping) even though nothing is submitted or
-   * signed — pass any funded account's public key. Defaults to a
-   * throwaway keypair's address, which works for simulation-only reads on
-   * most RPC providers; pass `sourcePublicKey` explicitly if yours
-   * requires an account that exists on-chain.
+   * Simulation still requires a source account for fee bookkeeping — pass any
+   * funded account's public key, or rely on the default throwaway keypair
+   * address if your RPC accepts simulation-only reads without a live account.
    */
   async isPaused(sourcePublicKey?: string): Promise<boolean> {
     const publicKey = sourcePublicKey ?? Keypair.random().publicKey();
@@ -152,17 +149,19 @@ export class CircuitBreaker {
   }
 
   /**
-   * Build, simulate, sign, and submit a contract invocation, then poll for
-   * the result. Shared by all state-changing entry points.
+   * Build, simulate, sign auth entries + envelope, submit, and poll.
+   * Matches the Soroban invocation pipeline used by {@link StellarAgent}.
    */
   private async invoke(functionName: string, args: xdr.ScVal[], signer: Keypair): Promise<void> {
+    const keypairSigner = new KeypairSigner(signer);
     const account = await this.rpcServer.getAccount(signer.publicKey());
 
+    const operation = this.contract.call(functionName, ...args);
     const tx = new TransactionBuilder(account, {
       fee: BASE_FEE,
       networkPassphrase: this.networkPassphrase,
     })
-      .addOperation(this.contract.call(functionName, ...args))
+      .addOperation(operation)
       .setTimeout(30)
       .build();
 
@@ -170,20 +169,49 @@ export class CircuitBreaker {
     if (SorobanRpc.Api.isSimulationError(simulated)) {
       throw new Error(`${functionName} simulation failed: ${simulated.error}`);
     }
+    if (SorobanRpc.Api.isSimulationRestore(simulated)) {
+      throw new Error(`${functionName} requires restoring expired ledger entries before invocation`);
+    }
 
-    const prepared = SorobanRpc.assembleTransaction(tx, simulated).build();
-    prepared.sign(signer);
+    const validUntilLedgerSeq = simulated.latestLedger + 100;
+    const auth = await Promise.all((simulated.result?.auth ?? []).map(async (entry) => {
+      if (entry.credentials().switch().name !== 'sorobanCredentialsAddress') {
+        return entry;
+      }
+      const signedXdr = await keypairSigner.signAuthEntry(entry.toXDR('base64'), {
+        networkPassphrase: this.networkPassphrase,
+        validUntilLedgerSeq,
+      });
+      return xdr.SorobanAuthorizationEntry.fromXDR(signedXdr, 'base64');
+    }));
 
-    const sendResult = await this.rpcServer.sendTransaction(prepared);
-    if (sendResult.status === 'ERROR') {
-      throw new Error(`${functionName} submission failed: ${JSON.stringify(sendResult.errorResult)}`);
+    const hostFunction = operation.body().invokeHostFunctionOp().hostFunction();
+    const authorizedOperation = Operation.invokeHostFunction({ func: hostFunction, auth });
+    const authorizedTx = TransactionBuilder.cloneFrom(tx)
+      .clearOperations()
+      .addOperation(authorizedOperation)
+      .build();
+
+    const assembled = SorobanRpc.assembleTransaction(authorizedTx, simulated).build();
+    const signedXdr = await keypairSigner.signTransaction(assembled.toXDR(), {
+      networkPassphrase: this.networkPassphrase,
+    });
+    const signed = TransactionBuilder.fromXDR(signedXdr, this.networkPassphrase);
+
+    const sendResult = await this.rpcServer.sendTransaction(signed);
+    if (sendResult.status !== 'PENDING' && sendResult.status !== 'DUPLICATE') {
+      throw new Error(
+        `${functionName} submission failed (${sendResult.status}): ${
+          sendResult.errorResult?.toXDR('base64') ?? 'unknown error'
+        }`,
+      );
     }
 
     await this.pollTransaction(sendResult.hash);
   }
 
   private async pollTransaction(hash: string): Promise<void> {
-    const maxAttempts = 15;
+    const maxAttempts = 30;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       const result = await this.rpcServer.getTransaction(hash);
       if (result.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
