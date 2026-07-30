@@ -11,7 +11,9 @@ import { Keypair } from '@stellar/stellar-sdk';
 import {
   StellarAgent,
   StellarAgentError,
+  CircuitBreaker,
   resolveContracts,
+  isDeployedAddress,
 } from '../index.js';
 
 const ENABLED = process.env.STELLAR_LOCAL_INTEGRATION === '1';
@@ -137,6 +139,26 @@ describeLocal('local standalone — parallel escrow lifecycle', () => {
       status: 'completed',
     });
   }, 120_000);
+});
+
+describeLocal('local standalone — circuit breaker', () => {
+  it('reads is_paused via CircuitBreaker.isPaused()', async () => {
+    const contracts = resolveContracts('local');
+    if (!isDeployedAddress(contracts.circuitBreaker)) {
+      return;
+    }
+
+    const ownerKey = Keypair.random();
+    await fund(ownerKey.publicKey());
+
+    const breaker = new CircuitBreaker({
+      rpcUrl: 'http://localhost:8000/soroban/rpc',
+      contractId: contracts.circuitBreaker,
+      networkPassphrase: 'Standalone Network ; February 2017',
+    });
+
+    await expect(breaker.isPaused(ownerKey.publicKey())).resolves.toBe(false);
+  }, 60_000);
 });
 
 // ─── predictPaymentOutcome vs on-chain RateLimiter.check — fuzz ──────────────
