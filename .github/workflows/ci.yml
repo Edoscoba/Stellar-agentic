@@ -52,13 +52,20 @@ jobs:
 
   # ── TypeScript packages ───────────────────────────────────────────────────
   #
-  # Previously this job ran in a `sdk/` directory that does not exist and
-  # filtered on `@stellaragent/sdk`, a package name that does not exist
-  # either — so every step was a no-op or an error. It now drives the whole
-  # pnpm/turbo workspace from the repo root.
+  # Monorepo packages live under packages/ (@stellaragent/core, cli, react).
+  # Commands run from the repo root with pnpm --filter, matching the dashboard
+  # job. Turbo task caching is restored via actions/cache; set TURBO_TOKEN /
+  # TURBO_TEAM repo secrets for Vercel remote cache if available.
   packages:
     name: Packages (TypeScript)
     runs-on: ubuntu-latest
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+      TURBO_TEAM: ${{ vars.TURBO_TEAM }}
+      TURBO_FILTERS: >-
+        --filter=@stellaragent/core
+        --filter=@stellaragent/cli
+        --filter=@stellaragent/react
 
     steps:
       - uses: actions/checkout@v4
@@ -78,19 +85,19 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Type check
-        run: pnpm run typecheck
+      - name: Cache Turbo
+        uses: actions/cache@v4
+        with:
+          path: |
+            .turbo
+            node_modules/.cache/turbo
+          key: ${{ runner.os }}-turbo-${{ hashFiles('pnpm-lock.yaml', 'turbo.json') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-turbo-${{ hashFiles('pnpm-lock.yaml', 'turbo.json') }}-
+            ${{ runner.os }}-turbo-
 
-      - name: Lint
-        run: pnpm run lint
-
-      - name: Build
-        run: pnpm run build
-
-      # `--filter '!@stellaragent/dashboard'` keeps Playwright out of this
-      # job — the dashboard e2e suite needs a browser and runs separately.
-      - name: Unit tests
-        run: pnpm --filter '!@stellaragent/dashboard' run test
+      - name: Build, lint, typecheck, and test
+        run: pnpm turbo run build lint typecheck test ${TURBO_FILTERS}
 
   # ── Python SDK ────────────────────────────────────────────────────────────
   python:
@@ -247,6 +254,9 @@ jobs:
   dashboard-e2e:
     name: Dashboard (Playwright)
     runs-on: ubuntu-latest
+    env:
+      TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
+      TURBO_TEAM: ${{ vars.TURBO_TEAM }}
 
     steps:
       - uses: actions/checkout@v4
@@ -266,10 +276,21 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Cache Turbo
+        uses: actions/cache@v4
+        with:
+          path: |
+            .turbo
+            node_modules/.cache/turbo
+          key: ${{ runner.os }}-turbo-${{ hashFiles('pnpm-lock.yaml', 'turbo.json') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-turbo-${{ hashFiles('pnpm-lock.yaml', 'turbo.json') }}-
+            ${{ runner.os }}-turbo-
+
       # @stellaragent/dashboard imports @stellaragent/core, which must be
       # built before vite can resolve it.
       - name: Build workspace dependencies
-        run: pnpm --filter @stellaragent/dashboard^... run build
+        run: pnpm turbo run build --filter=@stellaragent/dashboard^...
 
       - name: Install Playwright browsers
         run: pnpm --filter @stellaragent/dashboard exec playwright install --with-deps chromium

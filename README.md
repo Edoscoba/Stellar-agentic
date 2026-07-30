@@ -3,6 +3,7 @@
 > **AI Agent Payment Rails built on the Stellar blockchain.**  
 > The fastest, cheapest way to give AI agents autonomous payment capabilities.
 
+[![CI](https://github.com/Enniwealth/Stellar-agentic/actions/workflows/ci.yml/badge.svg)](https://github.com/Enniwealth/Stellar-agentic/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Stellar](https://img.shields.io/badge/Built%20on-Stellar-blue)](https://stellar.org)
 [![Soroban](https://img.shields.io/badge/Smart%20Contracts-Soroban-purple)](https://soroban.stellar.org)
