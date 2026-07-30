@@ -11,7 +11,9 @@ import {
   CircuitBreaker,
   asPublicAddress,
 } from '../circuitBreaker.js';
+import { StellarAgentError } from '../errors.js';
 import { KeypairSigner } from '../signer.js';
+import type { Signer } from '../signer.js';
 import { DEPLOYED_CONTRACTS, TEST_PUBLIC, TEST_SECRET } from './fixtures.js';
 
 function addressAuthEntry(): xdr.SorobanAuthorizationEntry {
@@ -63,15 +65,27 @@ function mockRpc(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function breakerWithRpc(rpc: Record<string, unknown>, signer?: Signer) {
+  return new CircuitBreaker({
+    rpcUrl: 'http://example.invalid',
+    contractId: DEPLOYED_CONTRACTS.circuitBreaker,
+    networkPassphrase: 'Test SDF Network ; September 2015',
+    rpc: rpc as unknown as SorobanRpc.Server,
+    signer,
+  });
+}
+
 describe('CircuitBreaker', () => {
+  it('rejects malformed contract IDs at construction', () => {
+    expect(() => new CircuitBreaker({
+      rpcUrl: 'http://example.invalid',
+      contractId: 'not-a-contract',
+    })).toThrow(StellarAgentError);
+  });
+
   it('targets the configured contract ID, not a zero address', async () => {
     const rpc = mockRpc();
-    const breaker = new CircuitBreaker({
-      rpcUrl: 'http://example.invalid',
-      contractId: DEPLOYED_CONTRACTS.circuitBreaker,
-      networkPassphrase: 'Test SDF Network ; September 2015',
-      rpc: rpc as unknown as SorobanRpc.Server,
-    });
+    const breaker = breakerWithRpc(rpc);
 
     await breaker.proposePause(TEST_SECRET);
 
@@ -86,22 +100,21 @@ describe('CircuitBreaker', () => {
     expect(invoke.functionName().toString()).toBe('propose_pause');
   });
 
-  it('simulates, signs auth entries, submits, and polls for propose_pause', async () => {
+  it('simulates, signs auth entries, submits, polls, and returns TxResult', async () => {
     const auth = addressAuthEntry();
     const rpc = mockRpc({
       simulateTransaction: vi.fn(async () => simulation(xdr.ScVal.scvVoid(), [auth])),
     });
-    const breaker = new CircuitBreaker({
-      rpcUrl: 'http://example.invalid',
-      contractId: DEPLOYED_CONTRACTS.circuitBreaker,
-      networkPassphrase: 'Test SDF Network ; September 2015',
-      rpc: rpc as unknown as SorobanRpc.Server,
-    });
+    const breaker = breakerWithRpc(rpc);
     const authSpy = vi.spyOn(KeypairSigner.prototype, 'signAuthEntry').mockImplementation(
       async (entry: string) => entry,
     );
 
-    await expect(breaker.proposePause(TEST_SECRET)).resolves.toBeUndefined();
+    await expect(breaker.proposePause(TEST_SECRET)).resolves.toEqual({
+      hash: 'cb-tx-hash',
+      success: true,
+      ledger: 101,
+    });
 
     expect(rpc.simulateTransaction).toHaveBeenCalledOnce();
     expect(authSpy).toHaveBeenCalledOnce();
@@ -110,23 +123,43 @@ describe('CircuitBreaker', () => {
     authSpy.mockRestore();
   });
 
+  it('uses a default instance signer when no argument is passed', async () => {
+    const rpc = mockRpc();
+    const signer = new KeypairSigner(
+      (await import('@stellar/stellar-sdk')).Keypair.fromSecret(TEST_SECRET),
+    );
+    const breaker = breakerWithRpc(rpc, signer);
+
+    await expect(breaker.executePause()).resolves.toMatchObject({ success: true });
+    expect(rpc.getAccount).toHaveBeenCalledWith(TEST_PUBLIC);
+  });
+
   it('uses simulation-only reads for isPaused and never submits', async () => {
     const rpc = mockRpc({
       simulateTransaction: vi.fn(async () => simulation(xdr.ScVal.scvBool(true))),
     });
-    const breaker = new CircuitBreaker({
-      rpcUrl: 'http://example.invalid',
-      contractId: DEPLOYED_CONTRACTS.circuitBreaker,
-      networkPassphrase: 'Test SDF Network ; September 2015',
-      rpc: rpc as unknown as SorobanRpc.Server,
-    });
+    const breaker = breakerWithRpc(rpc);
 
     await expect(breaker.isPaused(TEST_PUBLIC)).resolves.toBe(true);
     expect(rpc.simulateTransaction).toHaveBeenCalledOnce();
     expect(rpc.sendTransaction).not.toHaveBeenCalled();
   });
 
-  it('throws when simulation fails', async () => {
+  it('reads pause_quorum_count via simulation', async () => {
+    const rpc = mockRpc({
+      simulateTransaction: vi.fn(async (_tx: unknown) => {
+        const tx = _tx as { operations: Array<{ func: { invokeContract(): { functionName(): Buffer } } }> };
+        const method = tx.operations[0].func.invokeContract().functionName().toString();
+        expect(method).toBe('pause_quorum_count');
+        return simulation(xdr.ScVal.scvU32(3));
+      }),
+    });
+    const breaker = breakerWithRpc(rpc);
+
+    await expect(breaker.pauseQuorumCount(TEST_PUBLIC)).resolves.toBe(3);
+  });
+
+  it('maps contract panics to stable StellarAgentError codes', async () => {
     const rpc = mockRpc({
       simulateTransaction: vi.fn(async () => ({
         id: 'simulation',
@@ -136,13 +169,11 @@ describe('CircuitBreaker', () => {
         error: 'contract panic: not a trusted node',
       })),
     });
-    const breaker = new CircuitBreaker({
-      rpcUrl: 'http://example.invalid',
-      contractId: DEPLOYED_CONTRACTS.circuitBreaker,
-      rpc: rpc as unknown as SorobanRpc.Server,
-    });
+    const breaker = breakerWithRpc(rpc);
 
-    await expect(breaker.proposePause(TEST_SECRET)).rejects.toThrow(/simulation failed/);
+    const error = await breaker.proposePause(TEST_SECRET).catch((caught) => caught);
+    expect(error).toBeInstanceOf(StellarAgentError);
+    expect(error.code).toBe('NOT_AUTHORIZED');
     expect(rpc.sendTransaction).not.toHaveBeenCalled();
   });
 
@@ -150,26 +181,32 @@ describe('CircuitBreaker', () => {
     const rpc = mockRpc({
       sendTransaction: vi.fn(async () => ({ status: 'ERROR' })),
     });
-    const breaker = new CircuitBreaker({
-      rpcUrl: 'http://example.invalid',
-      contractId: DEPLOYED_CONTRACTS.circuitBreaker,
-      rpc: rpc as unknown as SorobanRpc.Server,
-    });
+    const breaker = breakerWithRpc(rpc);
 
-    await expect(breaker.executePause(TEST_SECRET)).rejects.toThrow(/submission failed/);
+    const error = await breaker.executePause(TEST_SECRET).catch((caught) => caught);
+    expect(error).toBeInstanceOf(StellarAgentError);
+    expect(error.code).toBe('SUBMISSION_FAILED');
     expect(rpc.getTransaction).not.toHaveBeenCalled();
   });
 
   it('rejects invalid secret keys before hitting the network', async () => {
     const rpc = mockRpc();
-    const breaker = new CircuitBreaker({
-      rpcUrl: 'http://example.invalid',
-      contractId: DEPLOYED_CONTRACTS.circuitBreaker,
-      rpc: rpc as unknown as SorobanRpc.Server,
+    const breaker = breakerWithRpc(rpc);
+
+    const error = await breaker.proposePause('not-a-secret').catch((caught) => caught);
+    expect(error).toBeInstanceOf(StellarAgentError);
+    expect(error.code).toBe('INVALID_ARGUMENT');
+    expect(rpc.getAccount).not.toHaveBeenCalled();
+  });
+
+  it('wraps RPC transport failures as NETWORK_ERROR', async () => {
+    const breaker = breakerWithRpc({
+      getAccount: vi.fn(async () => { throw new Error('connection refused'); }),
     });
 
-    await expect(breaker.proposePause('not-a-secret')).rejects.toThrow(/Invalid secret key/);
-    expect(rpc.getAccount).not.toHaveBeenCalled();
+    const error = await breaker.isPaused(TEST_PUBLIC).catch((caught) => caught);
+    expect(error).toBeInstanceOf(StellarAgentError);
+    expect(error.code).toBe('NETWORK_ERROR');
   });
 });
 
@@ -179,6 +216,7 @@ describe('asPublicAddress', () => {
   });
 
   it('rejects secret keys', () => {
+    expect(() => asPublicAddress(TEST_SECRET)).toThrow(StellarAgentError);
     expect(() => asPublicAddress(TEST_SECRET)).toThrow(/Secret keys must not/);
   });
 

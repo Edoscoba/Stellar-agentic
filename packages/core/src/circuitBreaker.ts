@@ -17,9 +17,6 @@
  * signers — a hardcoded list of secret keys is exactly the anti-pattern this
  * contract exists to avoid. Whether a signer is trusted is enforced by the
  * contract at `propose_pause` / `propose_unpause` time via `require_auth()`.
- *
- * Consumers pass a secret key only to sign transactions they submit; trusted
- * node membership is never checked client-side.
  */
 
 import {
@@ -36,7 +33,12 @@ import {
   xdr,
 } from '@stellar/stellar-sdk';
 
-import { KeypairSigner } from './signer.js';
+import { isDeployedAddress } from './contracts.js';
+import { StellarAgentError } from './errors.js';
+import type { StellarAgentErrorCode } from './errors.js';
+import { KeypairSigner, SigningError } from './signer.js';
+import type { Signer } from './signer.js';
+import type { TxResult } from './types/index.js';
 
 /** Stellar account public key (`G...`). Secret keys (`S...`) are rejected. */
 export type PublicAddress = string & { readonly __brand: unique symbol };
@@ -50,9 +52,15 @@ export function asPublicAddress(value: string): PublicAddress {
     return value as PublicAddress;
   }
   if (value.startsWith('S')) {
-    throw new Error('Secret keys must not be used where a public address is expected');
+    throw new StellarAgentError(
+      'INVALID_ARGUMENT',
+      'Secret keys must not be used where a public address is expected',
+    );
   }
-  throw new Error('Expected a valid Stellar public address (G...)');
+  throw new StellarAgentError(
+    'INVALID_ARGUMENT',
+    'Expected a valid Stellar public address (G...)',
+  );
 }
 
 export interface CircuitBreakerOptions {
@@ -65,6 +73,12 @@ export interface CircuitBreakerOptions {
   contractId: string;
   /** Network passphrase to sign transactions for. Defaults to testnet. */
   networkPassphrase?: string;
+  /**
+   * Default signer for write methods. When set, callers can omit passing a
+   * signer/secret on each call. Prefer {@link Signer} (remote/HSM) over raw
+   * secret keys in production.
+   */
+  signer?: Signer;
   /** Inject a Soroban RPC client (used by unit tests). */
   rpc?: SorobanRpc.Server;
 }
@@ -72,156 +86,269 @@ export interface CircuitBreakerOptions {
 function loadKeypair(secret: string): Keypair {
   try {
     return Keypair.fromSecret(secret);
-  } catch {
-    throw new Error('Invalid secret key format');
+  } catch (error) {
+    throw new StellarAgentError('INVALID_ARGUMENT', 'Invalid secret key format', { cause: error });
   }
+}
+
+function resolveSigner(input: string | Signer): Signer {
+  return typeof input === 'string' ? new KeypairSigner(loadKeypair(input)) : input;
+}
+
+function diagnosticText(events: xdr.DiagnosticEvent[] | undefined): string {
+  if (!events?.length) return '';
+  try {
+    return events.map((diagnostic) => {
+      const event = diagnostic.event();
+      return JSON.stringify({
+        topics: event.body().v0().topics().map((topic) => scValToNative(topic)),
+        data: scValToNative(event.body().v0().data()),
+      }, (_key, value) => typeof value === 'bigint' ? value.toString() : value);
+    }).join('; ');
+  } catch {
+    return events.map((event) => event.toXDR('base64')).join('; ');
+  }
+}
+
+function contractError(
+  fallback: StellarAgentErrorCode,
+  message: string,
+  transactionHash?: string,
+): StellarAgentError {
+  const mappings: Array<[RegExp, StellarAgentErrorCode]> = [
+    [/not a trusted node/i, 'NOT_AUTHORIZED'],
+    [/quorum not reached/i, 'CONTRACT_ERROR'],
+    [/not the admin/i, 'NOT_AUTHORIZED'],
+    [/not initialized|already initialized/i, 'CONTRACT_ERROR'],
+  ];
+  const code = mappings.find(([pattern]) => pattern.test(message))?.[1] ?? fallback;
+  return new StellarAgentError(code, message, { transactionHash });
 }
 
 export class CircuitBreaker {
   readonly contractId: string;
+  private readonly defaultSigner?: Signer;
   private rpcServer: SorobanRpc.Server;
   private contract: Contract;
   private networkPassphrase: string;
 
   constructor(options: CircuitBreakerOptions) {
+    if (!isDeployedAddress(options.contractId)) {
+      throw new StellarAgentError(
+        'INVALID_ARGUMENT',
+        `Invalid circuit breaker contract ID: ${options.contractId}`,
+      );
+    }
+
     this.contractId = options.contractId;
+    this.defaultSigner = options.signer;
     this.rpcServer = options.rpc ?? new SorobanRpc.Server(options.rpcUrl);
     this.contract = new Contract(options.contractId);
     this.networkPassphrase = options.networkPassphrase ?? Networks.TESTNET;
   }
 
-  /**
-   * A trusted node records its approval to pause the system.
-   * Whether `signerSecretKey` belongs to a trusted node is enforced on-chain.
-   */
-  async proposePause(signerSecretKey: string): Promise<void> {
-    const keypair = loadKeypair(signerSecretKey);
-    const nodeAddress = Address.fromString(keypair.publicKey()).toScVal();
-    await this.invoke('propose_pause', [nodeAddress], keypair);
+  /** Whether the system is currently paused. */
+  async isPaused(sourcePublicKey?: string): Promise<boolean> {
+    const value = await this.simulateRead('is_paused', [], sourcePublicKey);
+    return value === true;
+  }
+
+  /** Distinct trusted-node pause proposals still within the validity window. */
+  async pauseQuorumCount(sourcePublicKey?: string): Promise<number> {
+    const value = await this.simulateRead('pause_quorum_count', [], sourcePublicKey);
+    return Number(value ?? 0);
+  }
+
+  /** Distinct trusted-node unpause proposals still within the validity window. */
+  async unpauseQuorumCount(sourcePublicKey?: string): Promise<number> {
+    const value = await this.simulateRead('unpause_quorum_count', [], sourcePublicKey);
+    return Number(value ?? 0);
+  }
+
+  /** A trusted node records its approval to pause the system. */
+  async proposePause(signer?: string | Signer): Promise<TxResult> {
+    const resolved = await this.requireSigner(signer);
+    const nodeAddress = Address.fromString(await resolved.getPublicKey()).toScVal();
+    return this.invoke('propose_pause', [nodeAddress], resolved);
   }
 
   /** Execute the pause once enough on-chain proposals have been recorded. */
-  async executePause(signerSecretKey: string): Promise<void> {
-    await this.invoke('execute_pause', [], loadKeypair(signerSecretKey));
+  async executePause(signer?: string | Signer): Promise<TxResult> {
+    return this.invoke('execute_pause', [], await this.requireSigner(signer));
   }
 
   /** A trusted node records its approval to unpause the system. */
-  async proposeUnpause(signerSecretKey: string): Promise<void> {
-    const keypair = loadKeypair(signerSecretKey);
-    const nodeAddress = Address.fromString(keypair.publicKey()).toScVal();
-    await this.invoke('propose_unpause', [nodeAddress], keypair);
+  async proposeUnpause(signer?: string | Signer): Promise<TxResult> {
+    const resolved = await this.requireSigner(signer);
+    const nodeAddress = Address.fromString(await resolved.getPublicKey()).toScVal();
+    return this.invoke('propose_unpause', [nodeAddress], resolved);
   }
 
   /** Lift the pause once enough on-chain unpause proposals have been recorded. */
-  async unpause(signerSecretKey: string): Promise<void> {
-    await this.invoke('unpause', [], loadKeypair(signerSecretKey));
+  async unpause(signer?: string | Signer): Promise<TxResult> {
+    return this.invoke('unpause', [], await this.requireSigner(signer));
   }
 
-  /**
-   * Query the contract to see if the system is currently paused.
-   *
-   * Simulation still requires a source account for fee bookkeeping — pass any
-   * funded account's public key, or rely on the default throwaway keypair
-   * address if your RPC accepts simulation-only reads without a live account.
-   */
-  async isPaused(sourcePublicKey?: string): Promise<boolean> {
-    const publicKey = sourcePublicKey ?? Keypair.random().publicKey();
-    const account = await this.rpcServer.getAccount(publicKey);
-
-    const tx = new TransactionBuilder(account, {
-      fee: BASE_FEE,
-      networkPassphrase: this.networkPassphrase,
-    })
-      .addOperation(this.contract.call('is_paused'))
-      .setTimeout(30)
-      .build();
-
-    const simulated = await this.rpcServer.simulateTransaction(tx);
-    if (SorobanRpc.Api.isSimulationError(simulated)) {
-      throw new Error(`is_paused simulation failed: ${simulated.error}`);
+  private async requireSigner(signer?: string | Signer): Promise<Signer> {
+    if (signer !== undefined) {
+      return resolveSigner(signer);
     }
-
-    const retval = simulated.result?.retval;
-    if (!retval) {
-      return false;
+    if (this.defaultSigner) {
+      return this.defaultSigner;
     }
-    return scValToNative(retval) === true;
+    throw new StellarAgentError(
+      'INVALID_ARGUMENT',
+      'A signer or secret key is required — pass one to the method or set options.signer',
+    );
   }
 
-  /**
-   * Build, simulate, sign auth entries + envelope, submit, and poll.
-   * Matches the Soroban invocation pipeline used by {@link StellarAgent}.
-   */
-  private async invoke(functionName: string, args: xdr.ScVal[], signer: Keypair): Promise<void> {
-    const keypairSigner = new KeypairSigner(signer);
-    const account = await this.rpcServer.getAccount(signer.publicKey());
+  private async simulateRead(
+    method: string,
+    args: xdr.ScVal[],
+    sourcePublicKey?: string,
+  ): Promise<unknown> {
+    try {
+      const publicKey = sourcePublicKey
+        ? asPublicAddress(sourcePublicKey)
+        : Keypair.random().publicKey();
+      const account = await this.rpcServer.getAccount(publicKey);
 
-    const operation = this.contract.call(functionName, ...args);
-    const tx = new TransactionBuilder(account, {
-      fee: BASE_FEE,
-      networkPassphrase: this.networkPassphrase,
-    })
-      .addOperation(operation)
-      .setTimeout(30)
-      .build();
-
-    const simulated = await this.rpcServer.simulateTransaction(tx);
-    if (SorobanRpc.Api.isSimulationError(simulated)) {
-      throw new Error(`${functionName} simulation failed: ${simulated.error}`);
-    }
-    if (SorobanRpc.Api.isSimulationRestore(simulated)) {
-      throw new Error(`${functionName} requires restoring expired ledger entries before invocation`);
-    }
-
-    const validUntilLedgerSeq = simulated.latestLedger + 100;
-    const auth = await Promise.all((simulated.result?.auth ?? []).map(async (entry) => {
-      if (entry.credentials().switch().name !== 'sorobanCredentialsAddress') {
-        return entry;
-      }
-      const signedXdr = await keypairSigner.signAuthEntry(entry.toXDR('base64'), {
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
         networkPassphrase: this.networkPassphrase,
-        validUntilLedgerSeq,
-      });
-      return xdr.SorobanAuthorizationEntry.fromXDR(signedXdr, 'base64');
-    }));
+      })
+        .addOperation(this.contract.call(method, ...args))
+        .setTimeout(30)
+        .build();
 
-    const hostFunction = operation.body().invokeHostFunctionOp().hostFunction();
-    const authorizedOperation = Operation.invokeHostFunction({ func: hostFunction, auth });
-    const authorizedTx = TransactionBuilder.cloneFrom(tx)
-      .clearOperations()
-      .addOperation(authorizedOperation)
-      .build();
+      const simulated = await this.rpcServer.simulateTransaction(tx);
+      if (SorobanRpc.Api.isSimulationError(simulated)) {
+        throw contractError(
+          'SIMULATION_FAILED',
+          `${method} simulation failed: ${simulated.error}`,
+        );
+      }
+      if (SorobanRpc.Api.isSimulationRestore(simulated)) {
+        throw new StellarAgentError(
+          'SIMULATION_FAILED',
+          `${method} requires restoring expired ledger entries before invocation`,
+        );
+      }
 
-    const assembled = SorobanRpc.assembleTransaction(authorizedTx, simulated).build();
-    const signedXdr = await keypairSigner.signTransaction(assembled.toXDR(), {
-      networkPassphrase: this.networkPassphrase,
-    });
-    const signed = TransactionBuilder.fromXDR(signedXdr, this.networkPassphrase);
-
-    const sendResult = await this.rpcServer.sendTransaction(signed);
-    if (sendResult.status !== 'PENDING' && sendResult.status !== 'DUPLICATE') {
-      throw new Error(
-        `${functionName} submission failed (${sendResult.status}): ${
-          sendResult.errorResult?.toXDR('base64') ?? 'unknown error'
+      return simulated.result?.retval ? scValToNative(simulated.result.retval) : undefined;
+    } catch (error) {
+      if (error instanceof StellarAgentError) throw error;
+      throw new StellarAgentError(
+        'NETWORK_ERROR',
+        `${method} failed while communicating with Soroban RPC: ${
+          error instanceof Error ? error.message : String(error)
         }`,
+        { cause: error },
       );
     }
-
-    await this.pollTransaction(sendResult.hash);
   }
 
-  private async pollTransaction(hash: string): Promise<void> {
-    const maxAttempts = 30;
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+  private async invoke(
+    functionName: string,
+    args: xdr.ScVal[],
+    signer: Signer,
+  ): Promise<TxResult> {
+    try {
+      const publicKey = await signer.getPublicKey();
+      const account = await this.rpcServer.getAccount(publicKey);
+
+      const operation = this.contract.call(functionName, ...args);
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(operation)
+        .setTimeout(30)
+        .build();
+
+      const simulated = await this.rpcServer.simulateTransaction(tx);
+      if (SorobanRpc.Api.isSimulationError(simulated)) {
+        throw contractError(
+          'SIMULATION_FAILED',
+          `${functionName} simulation failed: ${simulated.error}`,
+        );
+      }
+      if (SorobanRpc.Api.isSimulationRestore(simulated)) {
+        throw new StellarAgentError(
+          'SIMULATION_FAILED',
+          `${functionName} requires restoring expired ledger entries before invocation`,
+        );
+      }
+
+      const validUntilLedgerSeq = simulated.latestLedger + 100;
+      const auth = await Promise.all((simulated.result?.auth ?? []).map(async (entry) => {
+        if (entry.credentials().switch().name !== 'sorobanCredentialsAddress') {
+          return entry;
+        }
+        const signedXdr = await signer.signAuthEntry(entry.toXDR('base64'), {
+          networkPassphrase: this.networkPassphrase,
+          validUntilLedgerSeq,
+        });
+        return xdr.SorobanAuthorizationEntry.fromXDR(signedXdr, 'base64');
+      }));
+
+      const hostFunction = operation.body().invokeHostFunctionOp().hostFunction();
+      const authorizedOperation = Operation.invokeHostFunction({ func: hostFunction, auth });
+      const authorizedTx = TransactionBuilder.cloneFrom(tx)
+        .clearOperations()
+        .addOperation(authorizedOperation)
+        .build();
+
+      const assembled = SorobanRpc.assembleTransaction(authorizedTx, simulated).build();
+      const signedXdr = await signer.signTransaction(assembled.toXDR(), {
+        networkPassphrase: this.networkPassphrase,
+      });
+      const signed = TransactionBuilder.fromXDR(signedXdr, this.networkPassphrase);
+
+      const submitted = await this.rpcServer.sendTransaction(signed);
+      if (submitted.status !== 'PENDING' && submitted.status !== 'DUPLICATE') {
+        const diagnostics = diagnosticText(submitted.diagnosticEvents);
+        throw contractError(
+          'SUBMISSION_FAILED',
+          `${functionName} submission failed (${submitted.status}): ${
+            diagnostics || submitted.errorResult?.toXDR('base64') || 'unknown error'
+          }`,
+        );
+      }
+
+      return await this.pollTransaction(submitted.hash, functionName);
+    } catch (error) {
+      if (error instanceof StellarAgentError || error instanceof SigningError) throw error;
+      throw new StellarAgentError(
+        'NETWORK_ERROR',
+        `${functionName} failed while communicating with Soroban RPC: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        { cause: error },
+      );
+    }
+  }
+
+  private async pollTransaction(hash: string, functionName: string): Promise<TxResult> {
+    for (let attempt = 0; attempt < 30; attempt++) {
       const result = await this.rpcServer.getTransaction(hash);
       if (result.status === SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
-        return;
+        return { hash, success: true, ledger: result.ledger };
       }
       if (result.status === SorobanRpc.Api.GetTransactionStatus.FAILED) {
-        throw new Error(`Transaction ${hash} failed`);
+        const diagnostics = diagnosticText(result.diagnosticEventsXdr);
+        throw contractError(
+          'TRANSACTION_FAILED',
+          `${functionName} transaction failed${diagnostics ? `: ${diagnostics}` : ''}`,
+          hash,
+        );
       }
       await new Promise((resolve) => setTimeout(resolve, 1000));
     }
-    throw new Error(`Transaction ${hash} did not complete in time`);
+    throw new StellarAgentError(
+      'TRANSACTION_TIMEOUT',
+      `${functionName} transaction did not complete in time`,
+      { transactionHash: hash },
+    );
   }
 }
