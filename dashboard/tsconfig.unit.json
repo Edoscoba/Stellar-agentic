@@ -1,0 +1,11 @@
+{
+  // Vitest unit specs run under vitest's globals (see vite.config.ts), which
+  // the app tsconfig deliberately withholds — it types the browser bundle
+  // only. `pnpm typecheck` runs this config alongside the other two.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["vitest/globals"],
+    "noEmit": true
+  },
+  "include": ["src/**/*.test.ts", "src/**/*.test.tsx", "vite.config.ts"]
+}

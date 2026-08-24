@@ -180,7 +180,9 @@ describe('shared Soroban invocation pipeline', () => {
             owner: TEST_PUBLIC,
             token: DEPLOYED_CONTRACTS.paymentChannel,
             limit_per_period: 50n,
+            period: ['Hourly'],
             spent_this_period: 10n,
+            period_start_ledger: 700,
             total_spent: 20n,
             active: true,
           },
@@ -204,6 +206,9 @@ describe('shared Soroban invocation pipeline', () => {
             hourly_spend: 5_000_000n,
             daily_spend: 6_000_000n,
             hourly_tx_count: 2,
+            hour_window_start: 700,
+            day_window_start: 100,
+            active: true,
           },
         };
         return { value: values[method], tx: { hash: '', success: true } };
@@ -215,11 +220,14 @@ describe('shared Soroban invocation pipeline', () => {
     });
     await expect(agent.getChannel(3n)).resolves.toMatchObject({
       id: 3n, limitPerPeriod: 50n, totalSpent: 20n,
+      period: 'hourly', periodStartLedger: 700,
     });
     await expect(agent.getJob(4n)).resolves.toMatchObject({
       id: 4n, taskDescription: 'task', result: 'done', status: 'pending_release',
     });
     await expect(agent.getRateLimitStatus()).resolves.toEqual({
+      configured: true,
+      active: true,
       maxPerTx: '1.0000000',
       maxPerHour: '2.0000000',
       maxPerDay: '3.0000000',
@@ -227,6 +235,29 @@ describe('shared Soroban invocation pipeline', () => {
       spentThisHour: '0.5000000',
       spentToday: '0.6000000',
       txsThisHour: 2,
+      hourWindowStartLedger: 700,
+      dayWindowStartLedger: 100,
+    });
+  });
+
+  // `RateLimiter.get_limits` panics for an agent `set_limits` was never called
+  // for, and that panic is the only signal distinguishing "no limits" from
+  // "limits that happen to be zero" — `is_active` returns `true` for both.
+  it('reports an unconfigured rate limiter instead of propagating its panic', async () => {
+    const agent = await agentWithRpc({});
+    vi.spyOn(agent as unknown as {
+      invokeContract(...args: unknown[]): Promise<unknown>;
+    }, 'invokeContract').mockImplementation(async () => {
+      throw new StellarAgentError(
+        'RATE_LIMIT_NOT_FOUND',
+        'get_limits simulation failed: no rate limit for agent',
+      );
+    });
+
+    await expect(agent.getRateLimitStatus()).resolves.toMatchObject({
+      configured: false,
+      maxPerTx: '0',
+      txsThisHour: 0,
     });
   });
 });

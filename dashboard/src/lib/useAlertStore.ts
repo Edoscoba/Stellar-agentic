@@ -24,7 +24,9 @@ function loadThresholds(): AlertThresholds {
   try {
     const raw = localStorage.getItem(THRESHOLDS_KEY);
     if (raw) return { ...DEFAULT_THRESHOLDS, ...JSON.parse(raw) };
-  } catch {}
+  } catch {
+    // Unreadable or malformed storage — fall back to the defaults below.
+  }
   return DEFAULT_THRESHOLDS;
 }
 
@@ -36,7 +38,9 @@ function loadWebhookConfig(): WebhookConfig {
   try {
     const raw = localStorage.getItem(WEBHOOK_KEY);
     if (raw) return JSON.parse(raw);
-  } catch {}
+  } catch {
+    // Unreadable or malformed storage — fall back to webhooks disabled.
+  }
   return { enabled: false, url: '' };
 }
 

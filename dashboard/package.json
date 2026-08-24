@@ -11,7 +11,7 @@
     "test:unit": "vitest run",
     "test:unit:watch": "vitest",
     "lint": "eslint src --ext .ts,.tsx",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.e2e.json",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.e2e.json && tsc --noEmit -p tsconfig.unit.json",
     "test:ui": "playwright test --ui"
   },
   "dependencies": {

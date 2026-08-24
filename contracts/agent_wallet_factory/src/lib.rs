@@ -4,12 +4,6 @@ use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, Address, Env, Map, String, Vec,
 };
 
-// ─── Storage Keys ────────────────────────────────────────────────────────────
-
-const ADMIN_KEY: &str = "admin";
-const AGENTS_KEY: &str = "agents";
-const AGENT_COUNT_KEY: &str = "agent_count";
-
 // ─── Data Types ──────────────────────────────────────────────────────────────
 
 /// Metadata stored on-chain for each agent wallet
@@ -33,9 +27,9 @@ pub struct AgentInfo {
 /// Events emitted by this contract
 #[contracttype]
 pub enum Event {
-    AgentCreated,
-    AgentDeactivated,
-    AgentReactivated,
+    Created,
+    Deactivated,
+    Reactivated,
 }
 
 // ─── Contract ────────────────────────────────────────────────────────────────
@@ -299,13 +293,13 @@ impl AgentWalletFactory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use soroban_sdk::testutils::{Address as _, Ledger};
+    use soroban_sdk::testutils::Address as _;
     use soroban_sdk::{Env, String};
 
     fn setup() -> (Env, AgentWalletFactoryClient<'static>) {
         let env = Env::default();
         env.mock_all_auths();
-        let contract_id = env.register_contract(None, AgentWalletFactory);
+        let contract_id = env.register(AgentWalletFactory, ());
         let client = AgentWalletFactoryClient::new(&env, &contract_id);
         (env, client)
     }

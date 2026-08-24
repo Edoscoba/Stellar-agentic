@@ -1,6 +1,11 @@
 # Rust
 target/
 Cargo.lock
+# ...except the contracts workspace's. soroban-env-host depends on
+# ed25519-dalek ">=2.0.0", so an unpinned CI resolve picks up 3.0.0, which it
+# does not compile against — the deployable WASM has to build from a
+# reproducible dependency set, not whatever crates.io published today.
+!contracts/Cargo.lock
 test_snapshots/
 
 # Node

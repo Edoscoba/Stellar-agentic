@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -27,11 +27,15 @@ describe('@stellaragent/cli packaging', () => {
     expect(readFileSync(entry, 'utf8').startsWith('#!/usr/bin/env node')).toBe(true);
   });
 
-  it('runs and prints to stdout', () => {
-    const out = execFileSync(process.execPath, ['--experimental-strip-types', entry], {
-      encoding: 'utf8',
-    });
-    expect(out.trim()).toBe('StellarAgent CLI coming soon!');
+  it('runs and prints to stdout', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      vi.resetModules();
+      await import('../index.js');
+      expect(log).toHaveBeenCalledWith('StellarAgent CLI coming soon!');
+    } finally {
+      log.mockRestore();
+    }
   });
 
   // `turbo run test` builds first (test dependsOn build), so dist/ exists in
