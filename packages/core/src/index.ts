@@ -46,6 +46,13 @@ export {
   // bid attestation
   attestRankBids,
   verifyBidAttestation,
+  // payment-outcome prediction
+  predictPaymentOutcome,
+  isWindowExpired,
+  ledgersRemainingInWindow,
+  LEDGERS_PER_CHANNEL_PERIOD,
+  RATE_LIMIT_LEDGERS_PER_HOUR,
+  RATE_LIMIT_LEDGERS_PER_DAY,
 } from './math/index.js';
 export type {
   AgentBid,
@@ -61,10 +68,35 @@ export type {
   VerifyBidAttestationOptions,
   BidAttestationVerification,
 } from './math/attestation.js';
+export type {
+  ChannelSpendState,
+  RateLimitSpendState,
+  PredictPaymentOutcomeParams,
+  PaymentPrediction,
+  BlockReason,
+} from './math/predict.js';
+
+// ─── Ledger-window wall-clock estimation ─────────────────────────────
+//
+// `RateLimiter`/`PaymentChannel` track their rolling windows in ledger
+// sequence numbers, not timestamps. See ./ledgerTime.ts for why "5s per
+// ledger" is treated as a fallback rather than a hard-coded constant.
+
+export {
+  estimateLedgerCloseSeconds,
+  estimateSecondsRemaining,
+  fetchLedgerCloseEstimate,
+  FALLBACK_LEDGER_CLOSE_SECONDS,
+} from './ledgerTime.js';
+export type { LedgerCloseSample, LedgerCloseEstimate } from './ledgerTime.js';
+
+import { fetchLedgerCloseEstimate } from './ledgerTime.js';
+import type { LedgerCloseEstimate } from './ledgerTime.js';
 
 import type {
   StellarAgentConfig,
   Network,
+  SpendPeriod,
   NetworkConfig,
   OpenChannelParams,
   PayForAPIParams,
@@ -174,6 +206,27 @@ function isLoopbackUrl(url: string): boolean {
     return false;
   }
 }
+
+/**
+ * What {@link StellarAgent.getRateLimitStatus} reports for an agent
+ * `RateLimiter.set_limits` was never called for. `RateLimiter.check` returns
+ * `true` unconditionally in that state, so the limits are not merely zero —
+ * they do not apply at all, which `configured: false` is what signals. Every
+ * other field is a placeholder and must not be read on its own.
+ */
+const UNCONFIGURED_RATE_LIMIT: RateLimitStatus = {
+  configured: false,
+  active: true,
+  maxPerTx: '0',
+  maxPerHour: '0',
+  maxPerDay: '0',
+  maxTxsPerHour: 0,
+  spentThisHour: '0',
+  spentToday: '0',
+  txsThisHour: 0,
+  hourWindowStartLedger: 0,
+  dayWindowStartLedger: 0,
+};
 
 // ─── StellarAgent ─────────────────────────────────────────────────────────────
 
@@ -659,7 +712,9 @@ export class StellarAgent {
       owner: this.asString(value.owner),
       token: this.asString(value.token),
       limitPerPeriod: this.asBigInt(value.limit_per_period),
+      period: this.spendPeriod(value.period),
       spentThisPeriod: this.asBigInt(value.spent_this_period),
+      periodStartLedger: this.asNumber(value.period_start_ledger),
       totalSpent: this.asBigInt(value.total_spent),
       active: value.active === true,
     };
@@ -699,14 +754,29 @@ export class StellarAgent {
    * Defaults to {@link StellarAgent.address} (checking this agent's own
    * limits) when omitted.
    */
-  async getRateLimitStatus(): Promise<RateLimitStatus> {
-    const value = this.asRecord((await this.invokeContract(
-      this.contracts.rateLimiter,
-      'get_limits',
-      [this.addressVal(this.address)],
-      true,
-    )).value);
+  async getRateLimitStatus(agentAddress: string = this.address): Promise<RateLimitStatus> {
+    // `get_limits` panics on-chain ("no rate limit for agent") when nothing has
+    // been configured — that failure is the only way to derive
+    // `configured: false`, since `is_active` returns `true` both for an
+    // unconfigured agent and for a configured, live one.
+    let raw: { value: unknown };
+    try {
+      raw = await this.invokeContract(
+        this.contracts.rateLimiter,
+        'get_limits',
+        [this.addressVal(agentAddress)],
+        true,
+      );
+    } catch (error) {
+      if (error instanceof StellarAgentError && error.code === 'RATE_LIMIT_NOT_FOUND') {
+        return { ...UNCONFIGURED_RATE_LIMIT };
+      }
+      throw error;
+    }
+    const value = this.asRecord(raw.value);
     return {
+      configured: true,
+      active: value.active === true,
       maxPerTx: fromStroops(this.asBigInt(value.max_per_tx)),
       maxPerHour: fromStroops(this.asBigInt(value.max_per_hour)),
       maxPerDay: fromStroops(this.asBigInt(value.max_per_day)),
@@ -714,6 +784,8 @@ export class StellarAgent {
       spentThisHour: fromStroops(this.asBigInt(value.hourly_spend)),
       spentToday: fromStroops(this.asBigInt(value.daily_spend)),
       txsThisHour: this.asNumber(value.hourly_tx_count),
+      hourWindowStartLedger: this.asNumber(value.hour_window_start),
+      dayWindowStartLedger: this.asNumber(value.day_window_start),
     };
   }
 
@@ -927,6 +999,17 @@ export class StellarAgent {
   /** Rust contracttype unit enums encode as a one-element symbol vector. */
   private enumVal(variant: string): xdr.ScVal {
     return xdr.ScVal.scvVec([xdr.ScVal.scvSymbol(variant)]);
+  }
+
+  /** Inverse of {@link spendPeriodVariant}: `Hourly` (as a symbol vec) -> `hourly`. */
+  private spendPeriod(value: unknown): SpendPeriod {
+    const raw = Array.isArray(value) ? value[0] : value;
+    const period = String(raw).replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase();
+    const valid: SpendPeriod[] = ['per_ledger', 'hourly', 'daily'];
+    if (!valid.includes(period as SpendPeriod)) {
+      throw new StellarAgentError('CONTRACT_ERROR', `Unknown spend period: ${String(raw)}`);
+    }
+    return period as SpendPeriod;
   }
 
   private spendPeriodVariant(period: OpenChannelParams['period']): string {

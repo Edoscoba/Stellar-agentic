@@ -20,5 +20,8 @@
     // the explicit empty `types`. E2E code is checked by tsconfig.e2e.json.
     "types": []
   },
-  "include": ["src"]
+  // Unit specs are typechecked by tsconfig.unit.json, which gives them the
+  // vitest globals this config withholds.
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"]
 }

@@ -55,7 +55,8 @@ function simulation(retval: xdr.ScVal, auth: xdr.SorobanAuthorizationEntry[] = [
 function mockRpc(overrides: Record<string, unknown> = {}) {
   return {
     getAccount: vi.fn(async () => new Account(TEST_PUBLIC, '1')),
-    simulateTransaction: vi.fn(async () => simulation(xdr.ScVal.scvVoid(), [addressAuthEntry()])),
+    simulateTransaction: vi.fn(async (_transaction: unknown) =>
+      simulation(xdr.ScVal.scvVoid(), [addressAuthEntry()])),
     sendTransaction: vi.fn(async () => ({ status: 'PENDING', hash: 'cb-tx-hash' })),
     getTransaction: vi.fn(async () => ({
       status: SorobanRpc.Api.GetTransactionStatus.SUCCESS,

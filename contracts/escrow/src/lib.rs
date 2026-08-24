@@ -258,7 +258,9 @@ impl Escrow {
         }
 
         if job.status == JobStatus::Disputed {
-            let dispute_deadline = job.dispute_deadline_ledger.expect("missing dispute deadline");
+            let dispute_deadline = job
+                .dispute_deadline_ledger
+                .expect("missing dispute deadline");
             if env.ledger().sequence() <= dispute_deadline {
                 panic!("dispute deadline not reached yet");
             }

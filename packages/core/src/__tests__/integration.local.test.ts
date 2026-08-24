@@ -6,7 +6,16 @@
  * suite creates and funds isolated accounts on every run.
  */
 import { beforeAll, describe, expect, it } from 'vitest';
-import { Keypair } from '@stellar/stellar-sdk';
+import {
+  Address,
+  BASE_FEE,
+  Contract,
+  Keypair,
+  SorobanRpc,
+  TransactionBuilder,
+  nativeToScVal,
+  scValToNative,
+} from '@stellar/stellar-sdk';
 
 import {
   StellarAgent,
@@ -14,7 +23,9 @@ import {
   CircuitBreaker,
   resolveContracts,
   isDeployedAddress,
+  predictPaymentOutcome,
 } from '../index.js';
+import type { RateLimitSpendState } from '../math/predict.js';
 
 const ENABLED = process.env.STELLAR_LOCAL_INTEGRATION === '1';
 const describeLocal = ENABLED ? describe : describe.skip;
@@ -175,9 +186,8 @@ describeLocal('local standalone — circuit breaker', () => {
 // This calls the deployed `RateLimiter` contract directly via Soroban RPC
 // (build → simulate → sign → submit → poll), the same low-level pattern
 // `circuitBreaker.ts` uses, rather than going through `StellarAgent` — the
-// SDK's own `setRateLimits`/`checkRateLimit` are still stubs (see the
-// lifecycle block above), and this suite needs to work today regardless of
-// when that lands.
+// fuzz needs to drive the contract into states the SDK's own
+// `setRateLimits`/`checkRateLimit` do not expose.
 describeLocal('predictPaymentOutcome vs on-chain RateLimiter.check — fuzz', () => {
   const rpcServer = new SorobanRpc.Server('http://localhost:8000/soroban/rpc', {
     allowHttp: true,
