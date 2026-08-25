@@ -6,6 +6,12 @@ Cargo.lock
 # does not compile against — the deployable WASM has to build from a
 # reproducible dependency set, not whatever crates.io published today.
 !contracts/Cargo.lock
+# The Rust SDK's lockfile is committed for the same reason: it is a published
+# library, but CI should test one pinned dependency set rather than whatever
+# crates.io resolved to this morning. A dependent's own resolution is
+# unaffected — cargo ignores a library's lockfile when it is used as a
+# dependency.
+!sdk/rust/Cargo.lock
 test_snapshots/
 
 # Node

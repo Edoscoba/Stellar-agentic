@@ -1,0 +1,62 @@
+# The Rust SDK is its own cargo workspace, deliberately separate from
+# `contracts/`. The contracts build for `wasm32v1-none` against soroban-sdk and
+# pin an old `ed25519-dalek` through `soroban-env-host`; this crate builds for
+# the host, needs `std`, and resolves its own dependency graph. Sharing one
+# workspace would force a single lockfile across both and reintroduce exactly
+# the resolution conflict `contracts/Cargo.lock` exists to pin away.
+[workspace]
+
+[package]
+name = "stellaragent"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+description = "AI agent payment rails on Stellar — deterministic bid scoring, spend prediction, and a Soroban client"
+documentation = "https://docs.rs/stellaragent"
+repository = "https://github.com/Edoscoba/Stellar-agentic"
+homepage = "https://github.com/Edoscoba/Stellar-agentic"
+readme = "README.md"
+license = "MIT"
+keywords = ["stellar", "soroban", "agent", "payments", "deterministic"]
+categories = ["api-bindings", "cryptography::cryptocurrencies", "finance"]
+# The crate is published from `sdk/rust`; the shared determinism fixtures live
+# at the repo root and are read by tests only, so they are excluded from the
+# package. `cargo test` in a checkout finds them via CARGO_MANIFEST_DIR.
+exclude = ["tests/"]
+# LICENSE is copied rather than referenced up the tree so the published crate
+# carries its own, as crates.io expects.
+
+[dependencies]
+async-trait = "0.1"
+base64 = "0.22"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+hex = "0.4"
+num-bigint = "0.4"
+num-integer = "0.1"
+num-traits = "0.2"
+rand_core = { version = "0.6", features = ["getrandom"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+stellar-strkey = "0.0.13"
+stellar-xdr = { version = "23", features = ["curr", "std", "base64"] }
+thiserror = "2"
+tokio = { version = "1", features = ["time"] }
+url = "2"
+
+[dev-dependencies]
+# `net` and `io-util` back the hand-rolled Soroban RPC stub in tests/mock_rpc.rs,
+# which exercises the real HTTP path rather than mocking the client internals.
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "net", "io-util"] }
+
+[features]
+default = []
+# Opt-in suite that talks to a real `stellar container` / quickstart network on
+# localhost. Off by default so `cargo test` stays hermetic in CI:
+#   cargo test --features integration -- --ignored
+integration = []
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
