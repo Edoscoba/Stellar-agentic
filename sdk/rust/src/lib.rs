@@ -5,8 +5,7 @@
 //! The third first-class implementation of this protocol, alongside
 //! `@stellaragent/core` (TypeScript) and `stellaragent` (Python).
 //!
-//! This first phase lands the part with a hard correctness requirement: the
-//! deterministic math. Bid scores and spend calculations must come out
+//! [`math`] is the part with a hard correctness requirement: bid scores and spend calculations must come out
 //! **byte-identical** in all three languages, or two agents scoring the same
 //! pool of bids will disagree about the winner.
 //!
@@ -25,11 +24,22 @@
 //! # Ok::<(), stellaragent::math::FixedPointError>(())
 //! ```
 
+pub mod contracts;
 pub mod error;
 pub mod math;
+pub mod rpc;
+pub mod scval;
+pub mod signer;
 pub mod types;
 
 pub use error::{ErrorCode, Result, StellarAgentError};
+
+/// The Stellar XDR types this SDK builds and decodes.
+///
+/// Re-exported so callers can construct an `ScVal` or inspect a
+/// `TransactionEnvelope` without adding `stellar-xdr` to their own manifest
+/// and risking a version skew against the one this crate compiled against.
+pub use stellar_xdr::curr as xdr;
 
 /// This crate's version, for user agents and diagnostics.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
