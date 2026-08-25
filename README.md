@@ -41,8 +41,10 @@ stellaragent/
 │   ├── react/        # @stellaragent/react — hooks
 │   └── cli/          # @stellaragent/cli
 ├── python/           # stellaragent — the Python SDK
+├── sdk/
+│   └── rust/         # stellaragent — the Rust SDK
 ├── dashboard/        # React + Tailwind business dashboard
-├── fixtures/         # Shared TS ↔ Python determinism fixtures
+├── fixtures/         # Shared TS ↔ Python ↔ Rust determinism fixtures
 ├── scripts/          # Deployment and fixture tooling
 ├── zk/               # Solvency-proof circuits (Rust)
 └── docs/             # Documentation
@@ -174,6 +176,36 @@ TypeScript one — both are verified byte-identical against
 mixed TS/Python agent fleet cannot disagree about a bid score. See
 [python/README.md](python/README.md).
 
+### Rust SDK
+
+```bash
+cargo add stellaragent
+```
+
+```rust
+let agent = StellarAgent::builder()
+    .network(Network::Testnet)
+    .secret_key(std::env::var("AGENT_SECRET").unwrap())
+    .build()
+    .await?;
+
+agent
+    .pay_for_api(&PayForApiParams {
+        endpoint: "https://api.example.com/inference".into(),
+        amount: "0.001".into(),
+        asset: Some("USDC".into()),
+        ..Default::default()
+    })
+    .await?;
+```
+
+The third implementation of the same protocol, for agent infrastructure
+written in Rust and for anything already embedding the Soroban tooling here.
+It consumes the same fixtures as the other two, so the required determinism
+check now covers three languages — which is the real test of whether those
+fixtures pin the semantics or merely describe them. See
+[sdk/rust/README.md](sdk/rust/README.md).
+
 ### Contracts (Rust/Soroban)
 
 There are seven contracts, and four of them need initializing in a specific
@@ -207,6 +239,7 @@ npm run dev
 - [ ] `RateLimiter` Soroban contract
 - [ ] TypeScript SDK core
 - [ ] Python SDK
+- [ ] Rust SDK
 - [ ] Business dashboard (React + Tailwind)
 - [ ] Stellar Community Fund grant application
 - [ ] Mainnet deployment
