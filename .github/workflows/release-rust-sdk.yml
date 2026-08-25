@@ -1,0 +1,93 @@
+# Publish the Rust SDK to crates.io.
+#
+# Triggered by a tag rather than by a push to main, so cutting a release is a
+# deliberate act: `git tag sdk-rust-v0.1.0 && git push --tags`. The tag prefix
+# is namespaced because this repo also ships npm packages and a Python
+# distribution, and a bare `v0.1.0` would be ambiguous about which.
+#
+# Requires a CARGO_REGISTRY_TOKEN repository secret. Without it the job fails
+# at the publish step, after the verification steps have already passed — so a
+# missing token is reported as a missing token, not as a broken build.
+name: Release (Rust SDK)
+
+on:
+  push:
+    tags:
+      - 'sdk-rust-v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Verify and package without publishing'
+        type: boolean
+        default: true
+
+concurrency:
+  group: release-rust-sdk
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk/rust
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: sdk/rust
+
+      # The tag is the source of truth for what is being released; a manifest
+      # that disagrees with it would publish a version nobody asked for.
+      - name: Tag matches the crate version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          MANIFEST=$(cargo metadata --no-deps --format-version 1 \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["version"])')
+          TAG="${GITHUB_REF_NAME#sdk-rust-v}"
+          if [ "$MANIFEST" != "$TAG" ]; then
+            echo "::error::Cargo.toml says $MANIFEST but the tag says $TAG"
+            exit 1
+          fi
+          echo "Releasing stellaragent $MANIFEST"
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Run tests
+        run: cargo test --all-features
+
+      # Publishing is irreversible on crates.io — a version can be yanked but
+      # never replaced — so the determinism fixtures are re-asserted here even
+      # though CI already ran them on the commit.
+      - name: Determinism fixtures still match
+        run: cargo test --test determinism
+
+      - name: Package
+        run: cargo package
+
+      - name: Publish
+        if: startsWith(github.ref, 'refs/tags/') && github.event.inputs.dry_run != 'true'
+        run: cargo publish --token "$CARGO_REGISTRY_TOKEN"
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Upload the packaged crate
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stellaragent-crate
+          path: sdk/rust/target/package/*.crate
+          retention-days: 14
