@@ -1,0 +1,136 @@
+# stellaragent-signer — example configuration
+#
+# Validate before deploying:
+#   stellaragent-signer check --config config.toml
+#
+# Every ceiling is parsed, every policy reference resolved and every key
+# resolved against its backend at startup, so a mistake here is a boot failure
+# rather than a surprise on the first payment.
+
+[server]
+# Bind loopback by default. Put TLS termination in front of this — the service
+# speaks plain HTTP and expects a proxy or service mesh to own the certificate.
+bind = "127.0.0.1:8443"
+# An envelope is a few kilobytes. The cap exists so an unauthenticated caller
+# cannot make the service allocate.
+max_body_bytes = 65536
+request_timeout_seconds = 30
+
+# ─── Backends ─────────────────────────────────────────────────────────────────
+#
+# Exactly one of these is normally enabled. `local` is for development.
+
+# [backend.local]
+# path = "/etc/signer/keys.toml"
+# # Required, and it means what it says: this file holds raw key material.
+# acknowledge_insecure = true
+
+[backend.aws_kms]
+# Falls back to the ambient AWS configuration when omitted.
+region = "eu-west-1"
+
+# ─── Audit ────────────────────────────────────────────────────────────────────
+
+[audit]
+# `stdout` is the right default in a container: the platform's log pipeline
+# handles shipping and retention. `file` fsyncs each record.
+sink = "stdout"
+# path = "/var/log/signer/audit.jsonl"
+
+# ─── Ledger estimate ──────────────────────────────────────────────────────────
+#
+# Bounds how far `validUntilLedgerSeq` may reach — the one control on how long
+# a leaked auth-entry signature stays replayable. See src/ledger.rs.
+
+[ledger]
+# Seed from the last known ledger after a restart, or leave 0 to calibrate from
+# the first request.
+initial = 0
+# Largest single advance accepted. ~1,000 ledgers is a little over an hour.
+max_advance = 1000
+
+# ─── Credentials ──────────────────────────────────────────────────────────────
+#
+# Generate with:  stellaragent-signer issue-token
+# The token is printed once and never stored; only its SHA-256 lives here.
+#
+# Rotation is overlap, not swap: add the new token, roll the fleet onto it,
+# then set `revoked_at` on the old one. There is no window where an agent
+# cannot sign.
+
+[[tokens]]
+id = "agent-1-2026-08"
+subject = "agent-1"
+token_sha256 = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+label = "issued by ops for the inference fleet"
+expires_at = 1788220800   # 2026-09-01T00:00:00Z
+
+# The previous credential, still valid until the fleet has rolled over.
+# [[tokens]]
+# id = "agent-1-2026-07"
+# subject = "agent-1"
+# token_sha256 = "..."
+# revoked_at = 1785542400
+
+# ─── Registry ─────────────────────────────────────────────────────────────────
+#
+# Identity → key and policy. A caller never names a key; this is the only
+# mapping, and it is one-way. That is what contains a stolen token.
+
+[registry.agent-1]
+backend = "aws-kms"
+key_id = "arn:aws:kms:eu-west-1:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab"
+policy = "inference-fleet"
+
+# ─── Policies ─────────────────────────────────────────────────────────────────
+#
+# Deny by default. An empty allowlist denies everything — a missing section
+# must fail closed, not open.
+
+[policy.inference-fleet]
+# Which networks this key will sign for. Empty denies all.
+networks = ["Test SDF Network ; September 2015"]
+
+# Largest single payment, in stroops. 10,000,000 stroops = 1 XLM.
+max_amount_stroops = "10000000"
+# Largest total across one transaction. Separate from the per-payment cap
+# because a transaction can carry many operations: a hundred payments each
+# under the cap is still a hundred payments.
+max_transaction_stroops = "50000000"
+
+# Who may be paid. Empty denies all.
+recipients = [
+  "GA7QYNF7SOWQ3GLR2BGMZEHXAVIRZA4KVWLTJJFC7MGXUA74P7UJVSGZ",
+]
+
+# Which contracts and functions may be invoked. Empty denies all.
+contracts = ["CA3D5KRYM6CB7OWQ6TWYRR3Z4T7GNZLKERYNZGGA5SOAOPIFY6YQGAXE"]
+functions = ["pay", "pay_with_conversion"]
+
+# How far past the current ledger an auth entry may stay valid. 100 ledgers is
+# about eight minutes, and matches what the SDKs request.
+max_auth_validity_ledgers = 100
+
+# Refuse a transaction with no upper time bound. An unbounded envelope stays
+# submittable forever, so one that never landed could be replayed much later.
+require_bounded_expiry = true
+
+# What to do with a contract call the service cannot decode.
+#   "refuse"        — do not sign it (the default, and the right answer)
+#   "conservative"  — decode restrictively: every integer becomes an amount and
+#                     every address a recipient, so an unknown call is subject
+#                     to *more* rules, never fewer
+unknown_calls = "refuse"
+
+[policy.inference-fleet.rate_limit]
+window_seconds = 3600
+max_requests = 500
+max_amount_stroops = "100000000"
+
+# Optional. Omit the whole section to permit signing at any time.
+# [policy.inference-fleet.time_window]
+# start_hour_utc = 0
+# end_hour_utc = 24
+# days = ["mon", "tue", "wed", "thu", "fri"]
+# not_before = 1767225600
+# not_after = 1798761600

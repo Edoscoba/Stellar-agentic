@@ -41,6 +41,8 @@ stellaragent/
 │   ├── react/        # @stellaragent/react — hooks
 │   └── cli/          # @stellaragent/cli
 ├── python/           # stellaragent — the Python SDK
+├── services/
+│   └── signer/       # stellaragent-signer — the remote signing service
 ├── dashboard/        # React + Tailwind business dashboard
 ├── fixtures/         # Shared TS ↔ Python determinism fixtures
 ├── scripts/          # Deployment and fixture tooling
@@ -173,6 +175,32 @@ TypeScript one — both are verified byte-identical against
 [643 shared fixtures](fixtures/determinism.json) as a required CI check, so a
 mixed TS/Python agent fleet cannot disagree about a bid score. See
 [python/README.md](python/README.md).
+
+### Signing service
+
+An agent with real funds should not hold a raw secret. `services/signer` is the
+server side of the `RemoteSigner` protocol the SDKs already speak — KMS-backed,
+policy-enforcing, and audited:
+
+```bash
+cd services/signer
+cargo run -- issue-token                       # a credential
+cargo run -- check --config config.toml        # validate before binding a port
+cargo run -- serve --config config.toml
+```
+
+```typescript
+const agent = await StellarAgent.create({
+  network: 'testnet',
+  signer: new RemoteSigner({ url: 'https://signer.internal', token: process.env.SIGNER_TOKEN }),
+});
+agent.holdsSecretKey;  // false
+```
+
+It decodes every envelope before signing it, refuses anything it cannot fully
+understand, enforces per-key spend caps and allowlists, and writes a
+hash-chained audit record for every request — granted or refused. Runbook and
+threat model: [docs/signer-deployment.md](docs/signer-deployment.md).
 
 ### Contracts (Rust/Soroban)
 
