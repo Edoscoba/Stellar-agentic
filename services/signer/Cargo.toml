@@ -6,6 +6,7 @@
 # the one process that holds signing authority. See
 # docs/signer-service-design.md, "Not depending on the stellaragent SDK crate".
 [workspace]
+members = ["conformance"]
 
 [package]
 name = "stellaragent-signer"
