@@ -83,7 +83,25 @@ async fn run() -> Result<(), String> {
         }
         Command::Check(path) => {
             let config = Config::load(&path).map_err(|error| error.to_string())?;
-            let warnings = config.validate().map_err(|error| error.to_string())?;
+            let mut warnings = config.validate().map_err(|error| error.to_string())?;
+
+            // `validate` is feature-agnostic library code, so it cannot know
+            // what this binary was compiled with. Without this, `check` would
+            // report a config as valid that `serve` then refuses to start on —
+            // a discovery worth making in CI rather than in production.
+            //
+            // `cfg!` rather than `#[cfg]` so the block compiles under every
+            // feature set and cannot rot unnoticed in the configuration that
+            // does not build it.
+            if !cfg!(feature = "aws-kms") && config.backend.aws_kms.is_some() {
+                warnings.push(
+                    "this config enables [backend.aws_kms], but this binary was built \
+                     without the `aws-kms` feature. `serve` will refuse to start. \
+                     Rebuild with --features aws-kms."
+                        .into(),
+                );
+            }
+
             for warning in &warnings {
                 println!("warning: {warning}");
             }

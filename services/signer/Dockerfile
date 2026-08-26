@@ -6,12 +6,20 @@
 # attack surface someone else maintains.
 
 # ─── Build ────────────────────────────────────────────────────────────────────
-FROM rust:1.82-bookworm AS build
+# Ahead of the crate's own `rust-version = "1.88"` on purpose: this image is
+# built WITH the `aws-kms` feature, and the AWS SDK requires 1.94.1. Pinned to
+# an exact patch rather than a floating tag, because the artifact that holds
+# the authority to move money should be reproducible.
+FROM rust:1.94.1-bookworm AS build
 
 WORKDIR /build
 
 # Dependencies first, so a source-only change does not re-download and rebuild
 # the world. The dummy sources are replaced below.
+# `aws-kms` is not a default feature — the default build is for development
+# and CI. A production image without it would start, then refuse every
+# request with "built without the aws-kms feature", which is a discovery
+# nobody should make in production.
 COPY Cargo.toml Cargo.lock ./
 COPY conformance/Cargo.toml conformance/Cargo.toml
 RUN mkdir -p src conformance/src \
@@ -19,15 +27,16 @@ RUN mkdir -p src conformance/src \
  && echo '' > src/lib.rs \
  && echo 'fn main() {}' > conformance/src/main.rs \
  && echo '' > conformance/src/lib.rs \
- && cargo build --release --bin stellaragent-signer \
+ && cargo build --release --features aws-kms --bin stellaragent-signer \
  && rm -rf src conformance/src
 
 COPY src src
 COPY conformance/src conformance/src
 
-# Touch the real sources so cargo does not reuse the dummy build's fingerprint.
-RUN touch src/main.rs src/lib.rs \
- && cargo build --release --bin stellaragent-signer \
+# Touch every real source so cargo cannot reuse the dummy build's fingerprint.
+# Missing one here would ship an image built from `fn main() {}`.
+RUN find src conformance/src -name '*.rs' -exec touch {} + \
+ && cargo build --release --features aws-kms --bin stellaragent-signer \
  && strip target/release/stellaragent-signer
 
 # ─── Runtime ──────────────────────────────────────────────────────────────────

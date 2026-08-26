@@ -4,7 +4,10 @@
 name = "stellaragent-signer-conformance"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.82"
+# The real floor, measured rather than guessed: `base64ct` needs Cargo's
+# edition2024 (1.85+), and reqwest's idna/icu chain in the conformance crate
+# needs 1.88. Verified by building and testing against 1.85 and 1.88.
+rust-version = "1.88"
 description = "Conformance suite for the StellarAgent remote signing protocol"
 license = "MIT"
 publish = false

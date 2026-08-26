@@ -12,7 +12,10 @@ members = ["conformance"]
 name = "stellaragent-signer"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.82"
+# The real floor, measured rather than guessed: `base64ct` needs Cargo's
+# edition2024 (1.85+), and reqwest's idna/icu chain in the conformance crate
+# needs 1.88. Verified by building and testing against 1.85 and 1.88.
+rust-version = "1.88"
 description = "Remote signing service for Stellar agent payment rails — KMS-backed, policy-enforcing, audited"
 repository = "https://github.com/Edoscoba/Stellar-agentic"
 readme = "README.md"
@@ -56,6 +59,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time",
 
 [features]
 default = []
+# Raises the effective MSRV to 1.94.1: that is what the AWS SDK requires, not
+# anything this crate does. The Dockerfile builds with it, so the image's
+# toolchain is pinned higher than `rust-version` above.
 aws-kms = ["dep:aws-config", "dep:aws-sdk-kms"]
 
 [profile.release]

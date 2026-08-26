@@ -152,8 +152,11 @@ jobs:
       # The shipped example must stay loadable: it is what every operator
       # starts from, and a config that fails validation is a bad first
       # impression at best and a misconfigured signer at worst.
+      # Built with the same feature set as the container image, so the check
+      # exercises the configuration the image will actually be given rather
+      # than a subset of it.
       - name: The example configuration validates
-        run: cargo run --bin stellaragent-signer -- check --config config.example.toml
+        run: cargo run --features aws-kms --bin stellaragent-signer -- check --config config.example.toml
 
       - name: Build the container image
         run: docker build -t stellaragent-signer:ci .
