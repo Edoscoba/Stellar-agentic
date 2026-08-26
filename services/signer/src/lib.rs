@@ -2,14 +2,17 @@
 
 //! The server side of the `RemoteSigner` protocol.
 //!
-//! Phase 3: decoding what we are asked to sign, and deciding whether to.
-//! Later phases add the audit log and the request path that ties it together.
+//! Phase 4: a tamper-evident record of every request and decision, and the
+//! counters worth alerting on. The request path that ties everything together
+//! lands next.
 
+pub mod audit;
 pub mod auth;
 pub mod backend;
 pub mod error;
 pub mod inspect;
 pub mod ledger;
+pub mod metrics;
 pub mod policy;
 pub mod protocol;
 pub mod registry;
