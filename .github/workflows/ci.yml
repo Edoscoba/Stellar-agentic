@@ -199,15 +199,19 @@ jobs:
   #
   # This is the regression test that matters for the determinism guarantee:
   # fixtures/determinism.json is generated from the TypeScript implementation,
-  # and both suites assert against that same file. If they agree, the two
-  # implementations are byte-identical for every case; if either diverges,
+  # and all three suites assert against that same file. If they agree, the
+  # three implementations are byte-identical for every case; if any diverges,
   # this job fails.
   #
-  # Both halves run in one job deliberately — split across two jobs, a
-  # branch-protection rule could be satisfied by one passing while the other
+  # All three run in one job deliberately — split across separate jobs, a
+  # branch-protection rule could be satisfied by one passing while another
   # was never required.
+  #
+  # Two implementations can agree by sharing an assumption neither of them
+  # wrote down; the third is what tests whether the fixtures actually pin the
+  # semantics rather than merely describing them.
   determinism:
-    name: Determinism (TS ↔ Python)
+    name: Determinism (TS ↔ Python ↔ Rust)
     runs-on: ubuntu-latest
 
     steps:
@@ -231,6 +235,14 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: sdk/rust
+
       - name: Install Node dependencies
         run: pnpm install --frozen-lockfile
 
@@ -249,6 +261,13 @@ jobs:
 
       - name: Python side
         run: pytest python/tests/test_determinism.py -q
+
+      # Reads the identical fixtures/determinism.json from the repo root and
+      # asserts string equality, never numeric closeness — "close enough" is
+      # precisely what makes two implementations pick different winners.
+      - name: Rust side
+        run: cargo test --test determinism
+        working-directory: sdk/rust
 
   # ── Deterministic math coverage gate ──────────────────────────────────────
   #

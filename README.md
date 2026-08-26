@@ -44,7 +44,7 @@ stellaragent/
 ├── services/
 │   └── signer/       # stellaragent-signer — the remote signing service
 ├── dashboard/        # React + Tailwind business dashboard
-├── fixtures/         # Shared TS ↔ Python determinism fixtures
+├── fixtures/         # Shared TS ↔ Python ↔ Rust determinism fixtures
 ├── scripts/          # Deployment and fixture tooling
 ├── zk/               # Solvency-proof circuits (Rust)
 └── docs/             # Documentation
@@ -235,6 +235,7 @@ npm run dev
 - [ ] `RateLimiter` Soroban contract
 - [ ] TypeScript SDK core
 - [ ] Python SDK
+- [ ] Rust SDK
 - [ ] Business dashboard (React + Tailwind)
 - [ ] Stellar Community Fund grant application
 - [ ] Mainnet deployment
