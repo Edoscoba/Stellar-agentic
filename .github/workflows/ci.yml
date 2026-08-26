@@ -153,6 +153,67 @@ jobs:
       - name: Package (dry run)
         run: cargo package --allow-dirty --no-verify
 
+  # ── Signing service ───────────────────────────────────────────────────────
+  #
+  # services/signer is the server side of the RemoteSigner protocol. Its own
+  # cargo workspace, separate from both contracts/ (wasm32v1-none, soroban-sdk)
+  # and sdk/rust (a client SDK) — see docs/signer-service-design.md.
+  #
+  # This is the one component that can move money, so the bar is higher than
+  # "it compiles": the adversarial suite has to pass too.
+  signer:
+    name: Service (signer)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/signer
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: services/signer
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      # --all-features compiles the aws-kms adapter's real client wiring. It is
+      # never exercised without credentials, but a compile error in it would
+      # otherwise only surface when someone tried to deploy.
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      # Includes tests/adversarial.rs — replay, malformed envelopes, cap
+      # splitting, ledger ratcheting, audit-log injection — and the backend
+      # conformance harness, which asserts every adapter produces byte-identical
+      # signatures for the same payload.
+      - name: Run tests
+        run: cargo test --workspace --all-features
+
+      - name: Check the docs build without warnings
+        run: cargo doc --no-deps --all-features
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+      # The shipped example must stay loadable: it is what every operator
+      # starts from, and a config that fails validation is a bad first
+      # impression at best and a misconfigured signer at worst.
+      # Built with the same feature set as the container image, so the check
+      # exercises the configuration the image will actually be given rather
+      # than a subset of it.
+      - name: The example configuration validates
+        run: cargo run --features aws-kms --bin stellaragent-signer -- check --config config.example.toml
+
+      - name: Build the container image
+        run: docker build -t stellaragent-signer:ci .
+
   # ── Python SDK ────────────────────────────────────────────────────────────
   python:
     name: SDK (Python ${{ matrix.python-version }})

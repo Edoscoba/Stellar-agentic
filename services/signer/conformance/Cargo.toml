@@ -1,0 +1,28 @@
+# Phase 5: a black-box conformance suite that drives the protocol over HTTP, so
+# it can verify ANY implementation in any language — not just this one.
+[package]
+name = "stellaragent-signer-conformance"
+version = "0.1.0"
+edition = "2021"
+# The real floor, measured rather than guessed: `base64ct` needs Cargo's
+# edition2024 (1.85+), and reqwest's idna/icu chain in the conformance crate
+# needs 1.88. Verified by building and testing against 1.85 and 1.88.
+rust-version = "1.88"
+description = "Conformance suite for the StellarAgent remote signing protocol"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "signer-conformance"
+path = "src/main.rs"
+
+[dependencies]
+base64 = "0.22"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+ed25519-dalek = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+stellar-strkey = "0.0.13"
+stellar-xdr = { version = "23", features = ["curr", "std", "base64"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "io-util"] }

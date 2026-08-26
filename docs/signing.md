@@ -204,6 +204,19 @@ parses the transaction and can refuse payments over a ceiling, enforce a
 destination allow-list, and write a meaningful audit log. A signature over an
 opaque digest can do none of that.
 
+### An implementation
+
+[`services/signer`](../services/signer) implements this protocol:
+KMS-backed (AWS `ECC_NIST_EDWARDS25519`, GCP `EC_SIGN_ED25519`, or a local
+keystore for development), with a policy engine, a hash-chained audit log, and
+a conformance suite any other implementation can run against itself.
+
+See [`docs/signer-deployment.md`](signer-deployment.md) for the runbook and
+threat model, and [`docs/signer-service-design.md`](signer-service-design.md)
+for why it is shaped the way it is — including seven points this document
+leaves under-specified, most importantly that `validUntilLedgerSeq` is
+caller-supplied and needs capping.
+
 ### Service responsibilities
 
 The service is trusted with the key, so it — not the agent — is where these
