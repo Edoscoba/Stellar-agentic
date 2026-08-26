@@ -2,13 +2,15 @@
 
 //! The server side of the `RemoteSigner` protocol.
 //!
-//! Phases 1–2: the wire protocol, the identity model behind it, and the
-//! backends a key can live in. Later phases add inspection and policy, the
-//! audit log, and the request path that ties them together.
+//! Phase 3: decoding what we are asked to sign, and deciding whether to.
+//! Later phases add the audit log and the request path that ties it together.
 
 pub mod auth;
 pub mod backend;
 pub mod error;
+pub mod inspect;
+pub mod ledger;
+pub mod policy;
 pub mod protocol;
 pub mod registry;
 pub mod stellar;
