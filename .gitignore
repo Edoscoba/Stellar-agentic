@@ -6,6 +6,11 @@ Cargo.lock
 # does not compile against — the deployable WASM has to build from a
 # reproducible dependency set, not whatever crates.io published today.
 !contracts/Cargo.lock
+# The signing service is a deployable binary, not a library. Its lockfile is
+# not optional: the artifact holding the authority to move money must build
+# from a dependency set someone reviewed, not from whatever crates.io published
+# the morning of the deploy.
+!services/signer/Cargo.lock
 test_snapshots/
 
 # Node

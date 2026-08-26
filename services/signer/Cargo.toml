@@ -1,0 +1,64 @@
+# The signing service is its own cargo workspace, separate from both
+# `contracts/` (wasm32v1-none, soroban-sdk) and `sdk/rust` (a client SDK).
+#
+# It deliberately does NOT depend on `stellaragent`: the dependency direction
+# would be backwards, and it would drag an HTTP *client* and a TLS stack into
+# the one process that holds signing authority. See
+# docs/signer-service-design.md, "Not depending on the stellaragent SDK crate".
+[workspace]
+
+[package]
+name = "stellaragent-signer"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+description = "Remote signing service for Stellar agent payment rails — KMS-backed, policy-enforcing, audited"
+repository = "https://github.com/Edoscoba/Stellar-agentic"
+readme = "README.md"
+license = "MIT"
+publish = false
+
+[dependencies]
+async-trait = "0.1"
+axum = "0.8"
+base64 = "0.22"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+hex = "0.4"
+rand_core = { version = "0.6", features = ["getrandom"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+stellar-strkey = "0.0.13"
+stellar-xdr = { version = "23", features = ["curr", "std", "base64"] }
+subtle = "2"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync", "time"] }
+toml = "0.8"
+tower-http = { version = "0.6", features = ["trace", "limit", "timeout"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Real cloud clients are opt-in. The adapters are written against narrow
+# in-crate traits (`AwsKmsApi`, `GcpKmsApi`) so their logic compiles, and is
+# tested against fakes, without either SDK present — see backend/aws_kms.rs.
+aws-config = { version = "1", optional = true }
+aws-sdk-kms = { version = "1", optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+# `oneshot` drives the real axum Router in tests, so the integration and
+# adversarial suites exercise routing, extractors and middleware rather than
+# calling the service struct directly.
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "io-util"] }
+
+[features]
+default = []
+aws-kms = ["dep:aws-config", "dep:aws-sdk-kms"]
+
+[profile.release]
+# A signing service should abort rather than unwind into a partially-applied
+# state, and panics here are always bugs.
+panic = "abort"
+overflow-checks = true
