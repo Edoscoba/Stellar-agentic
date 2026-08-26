@@ -8,7 +8,7 @@
 use soroban_sdk::{
     contract, contractimpl, contracttype,
     crypto::bls12_381::{Fr, G1Affine, G2Affine},
-    symbol_short, token, Address, Env, IntoVal, Map, Symbol, Vec, U256,
+    symbol_short, token, Address, BytesN, Env, IntoVal, Map, Symbol, Vec, U256,
 };
 
 // ─── Cross-asset conversion constants ─────────────────────────────────────────
@@ -29,6 +29,25 @@ pub const PRICE_SCALE: i128 = 10_000_000;
 /// deployment.
 pub const MAX_SLIPPAGE_BPS: i128 = 500;
 const BPS_DENOMINATOR: i128 = 10_000;
+
+// ─── Voucher settlement constants ────────────────────────────────────────────
+
+/// Default challenge window for a unilateral close: ~24 hours at 5s ledgers.
+///
+/// The trade-off is symmetric and there is no universally right answer: shorter
+/// frees capital sooner, longer gives a recipient more time to notice a stale
+/// close and challenge it. A recipient who cannot guarantee being online within
+/// the window should delegate to a watchtower — the assumption every payment
+/// channel makes, stated rather than assumed.
+pub const DEFAULT_DISPUTE_LEDGERS: u32 = 17_280;
+
+/// Floor on the challenge window, enforced at `enable_vouchers`.
+///
+/// Without it an owner could open a channel with a one-ledger window, close
+/// unilaterally with a stale voucher, and finalise before any recipient could
+/// physically respond — which would make the whole dispute mechanism
+/// decorative. ~1 hour.
+pub const MIN_DISPUTE_LEDGERS: u32 = 720;
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -66,6 +85,71 @@ pub struct Channel {
     pub total_spent: i128,
     /// Whether this channel is open
     pub active: bool,
+    /// Tokens this contract actually holds for this channel.
+    ///
+    /// Added by the voucher work, and a bug fix in its own right: before it,
+    /// `open_channel`'s `deposit` was validated, transferred and then never
+    /// stored, so every channel drew on one commingled pool and `total_spent`
+    /// was bounded by nothing — `spent_this_period` resets each period, so an
+    /// agent could spend `limit_per_period` per period indefinitely out of
+    /// other owners' deposits. Nothing can pay out more than this.
+    pub collateral: i128,
+    /// Sum of the per-recipient voucher allocations currently reserved.
+    ///
+    /// `collateral - allocated` is what the on-chain `pay` path may spend.
+    /// Keeping the two apart is what makes "a voucher payout never exceeds the
+    /// deposit" provable rather than incidental.
+    pub allocated: i128,
+    /// Ed25519 public key authorised to sign vouchers for this channel.
+    ///
+    /// `None` until `enable_vouchers`. Explicit rather than derived from
+    /// `agent`: a contract cannot recover a key from an `Address`, and keeping
+    /// the voucher key separate from the on-chain identity means it can live in
+    /// a signing service and rotate independently.
+    pub voucher_signer: Option<BytesN<32>>,
+    /// Ledgers a unilateral close stays open for challenge.
+    pub dispute_ledgers: u32,
+}
+
+/// Collateral reserved for voucher settlement with one recipient.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct Allocation {
+    /// Reserved amount. A voucher may never claim more than this.
+    pub amount: i128,
+    /// Paid out so far. Non-zero only after `finalize`.
+    pub settled: i128,
+}
+
+/// A close in flight for one `(channel, recipient)` pair.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct Settlement {
+    /// Sequence of the best voucher seen. Audit only — see `voucher::supersedes`.
+    pub best_sequence: u64,
+    /// Amount of the best voucher seen. This is what gets paid.
+    pub best_cumulative: i128,
+    /// What the closer originally submitted, for computing the penalty.
+    pub opened_cumulative: i128,
+    /// When the window opened.
+    pub opened_at_ledger: u32,
+    /// Whether the payer side opened it, and can therefore be penalised.
+    pub closed_by_payer: bool,
+}
+
+/// Keys for per-`(channel, recipient)` state.
+///
+/// Persistent storage under composite keys rather than another `Map` on the
+/// instance: the existing `channels` map is loaded and re-serialised in full on
+/// every `pay`, which is a cost that grows with the number of channels and a
+/// pattern this work should not extend.
+#[contracttype]
+#[derive(Clone)]
+pub enum DataKey {
+    /// Reserved collateral for a recipient.
+    Allocation(u64, Address),
+    /// An in-flight close for a recipient.
+    Settlement(u64, Address),
 }
 
 /// A single payment record
@@ -159,6 +243,12 @@ impl PaymentChannel {
             period_start_ledger: env.ledger().sequence(),
             total_spent: 0,
             active: true,
+            // The deposit was transferred in above and was previously dropped
+            // on the floor. Recording it is what bounds every payout path.
+            collateral: deposit,
+            allocated: 0,
+            voucher_signer: None,
+            dispute_ledgers: DEFAULT_DISPUTE_LEDGERS,
         };
 
         // Store channel, keyed by incrementing ID
@@ -245,6 +335,15 @@ impl PaymentChannel {
             panic!("spend limit exceeded for this period");
         }
 
+        // ...and that the channel actually holds the money. The spend limit is
+        // a *rate* limit and resets every period; without this a channel could
+        // outspend its own deposit indefinitely, paying out of collateral
+        // reserved for vouchers or belonging to another owner entirely.
+        // Allocated collateral is off limits here — it is already promised.
+        if amount > channel.collateral - channel.allocated {
+            panic!("insufficient channel collateral");
+        }
+
         // Execute the transfer
         let token_client = token::Client::new(&env, &channel.token);
         token_client.transfer(&env.current_contract_address(), &recipient, &amount);
@@ -252,6 +351,7 @@ impl PaymentChannel {
         // Update channel state
         channel.spent_this_period += amount;
         channel.total_spent += amount;
+        channel.collateral -= amount;
         channels.set(channel_id, channel.clone());
         env.storage()
             .instance()
@@ -380,6 +480,13 @@ impl PaymentChannel {
             panic!("spend limit exceeded for this period");
         }
 
+        // Same collateral bound as `pay`, and in the same unit: `amount` is in
+        // `channel.token`, which is the only asset this channel custodies, so
+        // the conversion does not change what is being spent.
+        if amount > channel.collateral - channel.allocated {
+            panic!("insufficient channel collateral");
+        }
+
         let received = if dest_token == channel.token {
             // Same-asset path: behaves exactly like `pay()`. No oracle or
             // AMM call — nothing to convert.
@@ -403,6 +510,7 @@ impl PaymentChannel {
         // Update channel state
         channel.spent_this_period += amount;
         channel.total_spent += amount;
+        channel.collateral -= amount;
         channels.set(channel_id, channel.clone());
         env.storage()
             .instance()
@@ -439,14 +547,30 @@ impl PaymentChannel {
             .get(&soroban_sdk::symbol_short!("channels"))
             .unwrap();
 
-        let channel = channels.get(channel_id).expect("channel not found");
+        let mut channel = channels.get(channel_id).expect("channel not found");
 
         if channel.owner != owner {
             panic!("not the channel owner");
         }
+        if !channel.active {
+            panic!("channel is closed");
+        }
+        if amount <= 0 {
+            panic!("amount must be positive");
+        }
 
         let token_client = token::Client::new(&env, &channel.token);
         token_client.transfer(&owner, &env.current_contract_address(), &amount);
+
+        // Previously the transfer happened and nothing recorded it, so a top-up
+        // added to the shared pool without increasing what this channel could
+        // spend.
+        channel.collateral += amount;
+        let mut channels = channels;
+        channels.set(channel_id, channel.clone());
+        env.storage()
+            .instance()
+            .set(&soroban_sdk::symbol_short!("channels"), &channels);
 
         env.events().publish(
             (
@@ -454,6 +578,13 @@ impl PaymentChannel {
                 soroban_sdk::symbol_short!("topup"),
             ),
             (channel_id, owner, amount),
+        );
+        env.events().publish(
+            (
+                soroban_sdk::symbol_short!("state"),
+                soroban_sdk::symbol_short!("channel"),
+            ),
+            (channel_id, channel),
         );
     }
 
@@ -473,6 +604,23 @@ impl PaymentChannel {
             panic!("not the channel owner");
         }
 
+        // Refund whatever is not reserved for an outstanding voucher
+        // allocation. This is the other half of the bug fixed here: the doc
+        // comment has always said "reclaims unspent funds" and the function has
+        // never transferred anything, stranding every deposit permanently.
+        //
+        // Allocations deliberately survive the close. A recipient holding a
+        // valid voucher must still be able to settle it, and letting the owner
+        // close their way out of an obligation would make every voucher
+        // worthless. What is left over after those settle is swept by a second
+        // `withdraw_free` call.
+        let refund = channel.collateral - channel.allocated;
+        if refund > 0 {
+            let token_client = token::Client::new(&env, &channel.token);
+            token_client.transfer(&env.current_contract_address(), &owner, &refund);
+            channel.collateral -= refund;
+        }
+
         channel.active = false;
         channels.set(channel_id, channel.clone());
         env.storage()
@@ -484,7 +632,7 @@ impl PaymentChannel {
                 soroban_sdk::symbol_short!("channel"),
                 soroban_sdk::symbol_short!("closed"),
             ),
-            (channel_id, owner),
+            (channel_id, owner, refund),
         );
         env.events().publish(
             (
@@ -563,6 +711,381 @@ impl PaymentChannel {
         env.storage().instance().set(&symbol_short!("amm"), &amm);
     }
 
+    // ── Vouchers ─────────────────────────────────────────────────────────────
+
+    /// Authorise an Ed25519 key to mint vouchers for this channel, and set the
+    /// challenge window.
+    ///
+    /// Separate from `open_channel` on purpose: the existing signature stays
+    /// untouched, so every caller that does not want vouchers is unaffected.
+    ///
+    /// Re-calling rotates the key. Rotation is deliberately allowed while
+    /// allocations are outstanding — a compromised voucher key is exactly when
+    /// you most need to revoke it, and vouchers already signed under the old
+    /// key stop verifying immediately. That is the intended blast radius: an
+    /// owner who rotates also repudiates anything the old key signed and has
+    /// not yet settled.
+    pub fn enable_vouchers(
+        env: Env,
+        owner: Address,
+        channel_id: u64,
+        voucher_signer: BytesN<32>,
+        dispute_ledgers: u32,
+    ) {
+        owner.require_auth();
+
+        if dispute_ledgers < MIN_DISPUTE_LEDGERS {
+            panic!("dispute window is below the minimum");
+        }
+
+        let mut channels = Self::load_channels(&env);
+        let mut channel = channels.get(channel_id).expect("channel not found");
+
+        if channel.owner != owner {
+            panic!("not the channel owner");
+        }
+        if !channel.active {
+            panic!("channel is closed");
+        }
+
+        channel.voucher_signer = Some(voucher_signer.clone());
+        channel.dispute_ledgers = dispute_ledgers;
+        Self::save_channel(&env, &mut channels, channel_id, &channel);
+
+        env.events().publish(
+            (symbol_short!("voucher"), symbol_short!("enabled")),
+            (channel_id, voucher_signer, dispute_ledgers),
+        );
+    }
+
+    /// Reserve collateral for voucher settlement with one recipient.
+    ///
+    /// One transaction per `(channel, recipient)` pair, once — not per payment.
+    /// This is what makes "a payout never exceeds the deposit" hold by
+    /// construction: `collateral - allocated` is all the on-chain `pay` path may
+    /// touch, and a voucher may never claim more than its allocation, so the sum
+    /// of everything that can leave is bounded by the collateral.
+    ///
+    /// Increases an existing allocation rather than replacing it, so topping up
+    /// a busy recipient does not require settling first.
+    pub fn allocate(env: Env, owner: Address, channel_id: u64, recipient: Address, amount: i128) {
+        owner.require_auth();
+
+        if amount <= 0 {
+            panic!("allocation must be positive");
+        }
+
+        let mut channels = Self::load_channels(&env);
+        let mut channel = channels.get(channel_id).expect("channel not found");
+
+        if channel.owner != owner {
+            panic!("not the channel owner");
+        }
+        if !channel.active {
+            panic!("channel is closed");
+        }
+        if channel.voucher_signer.is_none() {
+            panic!("vouchers are not enabled for this channel");
+        }
+        if amount > channel.collateral - channel.allocated {
+            panic!("insufficient free collateral to allocate");
+        }
+        // An allocation cannot be resized while its close is in flight: the
+        // window's payout bound was checked against the amount at the time, and
+        // moving it underneath an open dispute would invalidate that check.
+        if Self::settlement(&env, channel_id, &recipient).is_some() {
+            panic!("a close is already in flight for this recipient");
+        }
+
+        let key = DataKey::Allocation(channel_id, recipient.clone());
+        let mut allocation = Self::allocation(&env, channel_id, &recipient).unwrap_or(Allocation {
+            amount: 0,
+            settled: 0,
+        });
+        allocation.amount += amount;
+
+        channel.allocated += amount;
+        Self::persist(&env, &key, &allocation, channel.dispute_ledgers);
+        Self::save_channel(&env, &mut channels, channel_id, &channel);
+
+        env.events().publish(
+            (symbol_short!("voucher"), symbol_short!("allocated")),
+            (channel_id, recipient, amount, allocation.amount),
+        );
+    }
+
+    /// Return unreserved collateral to the owner without closing the channel.
+    ///
+    /// Also the sweep for what is left after allocations finalise, which is why
+    /// it is callable on a closed channel.
+    pub fn withdraw_free(env: Env, owner: Address, channel_id: u64) -> i128 {
+        owner.require_auth();
+
+        let mut channels = Self::load_channels(&env);
+        let mut channel = channels.get(channel_id).expect("channel not found");
+
+        if channel.owner != owner {
+            panic!("not the channel owner");
+        }
+
+        let free = channel.collateral - channel.allocated;
+        if free <= 0 {
+            return 0;
+        }
+
+        let token_client = token::Client::new(&env, &channel.token);
+        token_client.transfer(&env.current_contract_address(), &owner, &free);
+        channel.collateral -= free;
+        Self::save_channel(&env, &mut channels, channel_id, &channel);
+
+        env.events().publish(
+            (symbol_short!("channel"), symbol_short!("withdrew")),
+            (channel_id, owner, free),
+        );
+
+        free
+    }
+
+    /// Settle a voucher immediately, with both sides agreeing.
+    ///
+    /// Nothing is in dispute, so nothing waits. This is the path that should be
+    /// taken almost always, and it costs one transaction for any number of
+    /// off-chain payments.
+    ///
+    /// "Mutual signature" is expressed as two authorisations: the voucher
+    /// carries the payer's, and `owner` plus `recipient` both authorise this
+    /// call. A close nobody disputes needs no window.
+    pub fn close_cooperative(
+        env: Env,
+        channel_id: u64,
+        recipient: Address,
+        sequence: u64,
+        cumulative_amount: i128,
+        signature: BytesN<64>,
+    ) -> i128 {
+        Self::require_not_paused(&env);
+
+        let channels = Self::load_channels(&env);
+        let channel = channels.get(channel_id).expect("channel not found");
+
+        channel.owner.require_auth();
+        recipient.require_auth();
+
+        Self::verify_voucher(
+            &env,
+            &channel,
+            channel_id,
+            &recipient,
+            sequence,
+            cumulative_amount,
+            &signature,
+        );
+
+        // A cooperative close skips the window, so it must not be usable to
+        // sidestep one already open — otherwise a payer could open a dispute
+        // with a stale voucher and, if the recipient ever co-signs anything,
+        // finalise at the stale amount.
+        if Self::settlement(&env, channel_id, &recipient).is_some() {
+            panic!("a close is already in flight; challenge or finalize it");
+        }
+
+        Self::pay_out(&env, channel_id, &recipient, cumulative_amount, 0);
+
+        env.events().publish(
+            (symbol_short!("voucher"), symbol_short!("coopclose")),
+            (channel_id, recipient, sequence, cumulative_amount),
+        );
+
+        cumulative_amount
+    }
+
+    /// Close with a voucher, opening a challenge window.
+    ///
+    /// Anyone holding a valid voucher may call this, including the payer. That
+    /// is the point: a recipient must be able to settle when the payer goes
+    /// dark, and a payer must be able to reclaim collateral when the recipient
+    /// does. The window is what keeps a payer from using it to pay less than
+    /// they owe.
+    pub fn close_unilateral(
+        env: Env,
+        closer: Address,
+        channel_id: u64,
+        recipient: Address,
+        sequence: u64,
+        cumulative_amount: i128,
+        signature: BytesN<64>,
+    ) {
+        Self::require_not_paused(&env);
+        closer.require_auth();
+
+        let channels = Self::load_channels(&env);
+        let channel = channels.get(channel_id).expect("channel not found");
+
+        Self::verify_voucher(
+            &env,
+            &channel,
+            channel_id,
+            &recipient,
+            sequence,
+            cumulative_amount,
+            &signature,
+        );
+
+        if Self::settlement(&env, channel_id, &recipient).is_some() {
+            panic!("a close is already in flight for this recipient");
+        }
+
+        // Only a payer-side close can be penalised, because only a payer
+        // benefits from a stale voucher — a recipient submitting an old one
+        // would be paying themselves less.
+        let closed_by_payer = closer == channel.owner || closer == channel.agent;
+
+        let settlement = Settlement {
+            best_sequence: sequence,
+            best_cumulative: cumulative_amount,
+            opened_cumulative: cumulative_amount,
+            opened_at_ledger: env.ledger().sequence(),
+            closed_by_payer,
+        };
+        Self::persist(
+            &env,
+            &DataKey::Settlement(channel_id, recipient.clone()),
+            &settlement,
+            channel.dispute_ledgers,
+        );
+
+        env.events().publish(
+            (symbol_short!("voucher"), symbol_short!("closing")),
+            (
+                channel_id,
+                recipient,
+                closer,
+                cumulative_amount,
+                channel.dispute_ledgers,
+            ),
+        );
+    }
+
+    /// Replace the voucher an open close will pay, with a larger one.
+    ///
+    /// No authorisation: the signature *is* the authority, and requiring one
+    /// would stop a watchtower challenging on a recipient's behalf — which is
+    /// precisely what watchtowers are for.
+    ///
+    /// The window does not reset. Resetting would let a payer hold a channel
+    /// open indefinitely by drip-feeding vouchers one stroop apart.
+    pub fn challenge(
+        env: Env,
+        channel_id: u64,
+        recipient: Address,
+        sequence: u64,
+        cumulative_amount: i128,
+        signature: BytesN<64>,
+    ) {
+        let channels = Self::load_channels(&env);
+        let channel = channels.get(channel_id).expect("channel not found");
+
+        Self::verify_voucher(
+            &env,
+            &channel,
+            channel_id,
+            &recipient,
+            sequence,
+            cumulative_amount,
+            &signature,
+        );
+
+        let key = DataKey::Settlement(channel_id, recipient.clone());
+        let mut settlement: Settlement = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .expect("no close is in flight for this recipient");
+
+        if env.ledger().sequence() >= settlement.opened_at_ledger + channel.dispute_ledgers {
+            panic!("the challenge window has closed");
+        }
+
+        // Ordered by amount, not by sequence. Only the payer can mint vouchers
+        // and a payer always wants to pay less, so a sequence-ordered rule
+        // would let them sign (sequence = u64::MAX, amount = 0) and erase the
+        // claim. See `voucher::supersedes`.
+        if !voucher::supersedes(cumulative_amount, settlement.best_cumulative) {
+            panic!("voucher does not supersede the current best");
+        }
+
+        settlement.best_sequence = sequence;
+        settlement.best_cumulative = cumulative_amount;
+        Self::persist(&env, &key, &settlement, channel.dispute_ledgers);
+
+        env.events().publish(
+            (symbol_short!("voucher"), symbol_short!("challenge")),
+            (channel_id, recipient, sequence, cumulative_amount),
+        );
+    }
+
+    /// Pay out an expired close. Callable by anyone — there is nothing left to
+    /// decide, and requiring a specific caller would let one side stall.
+    pub fn finalize(env: Env, channel_id: u64, recipient: Address) -> i128 {
+        let channels = Self::load_channels(&env);
+        let channel = channels.get(channel_id).expect("channel not found");
+
+        let key = DataKey::Settlement(channel_id, recipient.clone());
+        let settlement: Settlement = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .expect("no close is in flight for this recipient");
+
+        if env.ledger().sequence() < settlement.opened_at_ledger + channel.dispute_ledgers {
+            panic!("the challenge window is still open");
+        }
+
+        let allocation = Self::allocation(&env, channel_id, &recipient)
+            .expect("no allocation for this recipient");
+
+        // A stale close that was successfully challenged costs the payer the
+        // amount they tried to withhold, so cheating is worse than honesty
+        // rather than free. Bounded by what the owner would otherwise reclaim —
+        // when the recipient is owed the whole allocation there is nothing left
+        // to penalise with, which is documented rather than hidden.
+        let penalty = if settlement.closed_by_payer
+            && settlement.best_cumulative > settlement.opened_cumulative
+        {
+            let understatement = settlement.best_cumulative - settlement.opened_cumulative;
+            let reclaimable = allocation.amount - settlement.best_cumulative;
+            if understatement < reclaimable {
+                understatement
+            } else {
+                reclaimable
+            }
+        } else {
+            0
+        };
+
+        env.storage().persistent().remove(&key);
+        Self::pay_out(
+            &env,
+            channel_id,
+            &recipient,
+            settlement.best_cumulative,
+            penalty,
+        );
+
+        env.events().publish(
+            (symbol_short!("voucher"), symbol_short!("finalized")),
+            (
+                channel_id,
+                recipient,
+                settlement.best_sequence,
+                settlement.best_cumulative,
+                penalty,
+            ),
+        );
+
+        settlement.best_cumulative + penalty
+    }
+
     // ── Queries ──────────────────────────────────────────────────────────────
 
     pub fn get_channel(env: Env, channel_id: u64) -> Channel {
@@ -572,6 +1095,26 @@ impl PaymentChannel {
             .get(&soroban_sdk::symbol_short!("channels"))
             .unwrap();
         channels.get(channel_id).expect("channel not found")
+    }
+
+    /// Collateral reserved for one recipient, and what it has paid out.
+    pub fn get_allocation(env: Env, channel_id: u64, recipient: Address) -> Allocation {
+        Self::allocation(&env, channel_id, &recipient).unwrap_or(Allocation {
+            amount: 0,
+            settled: 0,
+        })
+    }
+
+    /// The close in flight for one recipient, if there is one.
+    pub fn get_settlement(env: Env, channel_id: u64, recipient: Address) -> Option<Settlement> {
+        Self::settlement(&env, channel_id, &recipient)
+    }
+
+    /// Collateral not reserved for any voucher allocation — what the on-chain
+    /// `pay` path may spend, and what `withdraw_free` would return.
+    pub fn free_collateral(env: Env, channel_id: u64) -> i128 {
+        let channel = Self::get_channel(env, channel_id);
+        channel.collateral - channel.allocated
     }
 
     pub fn remaining_this_period(env: Env, channel_id: u64) -> i128 {
@@ -756,6 +1299,145 @@ impl PaymentChannel {
         )
     }
 
+    fn load_channels(env: &Env) -> Map<u64, Channel> {
+        env.storage()
+            .instance()
+            .get(&symbol_short!("channels"))
+            .unwrap_or(Map::new(env))
+    }
+
+    fn save_channel(env: &Env, channels: &mut Map<u64, Channel>, id: u64, channel: &Channel) {
+        channels.set(id, channel.clone());
+        env.storage()
+            .instance()
+            .set(&symbol_short!("channels"), channels);
+        env.events().publish(
+            (symbol_short!("state"), symbol_short!("channel")),
+            (id, channel.clone()),
+        );
+    }
+
+    /// Write a persistent entry and extend its lifetime past the dispute
+    /// window.
+    ///
+    /// Not a test convenience. Soroban archives persistent entries whose TTL
+    /// lapses, and a settlement has to survive a window that is ~24 hours of
+    /// ledgers by default. Without this, an entry could be archived *during* an
+    /// open dispute — `finalize` would then fail on an archived key and the
+    /// allocation would be stranded with no way to pay it out or reclaim it.
+    ///
+    /// Extended to twice the window so a channel that is not touched for the
+    /// whole dispute period still finalises comfortably.
+    fn persist<V: soroban_sdk::IntoVal<Env, soroban_sdk::Val>>(
+        env: &Env,
+        key: &DataKey,
+        value: &V,
+        dispute_ledgers: u32,
+    ) {
+        let lifetime = dispute_ledgers.saturating_mul(2);
+        env.storage().persistent().set(key, value);
+        env.storage()
+            .persistent()
+            .extend_ttl(key, dispute_ledgers, lifetime);
+    }
+
+    fn allocation(env: &Env, channel_id: u64, recipient: &Address) -> Option<Allocation> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Allocation(channel_id, recipient.clone()))
+    }
+
+    fn settlement(env: &Env, channel_id: u64, recipient: &Address) -> Option<Settlement> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Settlement(channel_id, recipient.clone()))
+    }
+
+    /// Every check a voucher must pass before it is allowed to influence a
+    /// payout, in one place so no entry point can accidentally skip one.
+    fn verify_voucher(
+        env: &Env,
+        channel: &Channel,
+        channel_id: u64,
+        recipient: &Address,
+        sequence: u64,
+        cumulative_amount: i128,
+        signature: &BytesN<64>,
+    ) {
+        let signer = channel
+            .voucher_signer
+            .clone()
+            .expect("vouchers are not enabled for this channel");
+
+        if cumulative_amount <= 0 {
+            panic!("voucher amount must be positive");
+        }
+
+        let allocation =
+            Self::allocation(env, channel_id, recipient).expect("no allocation for this recipient");
+
+        // The bound that makes the payout provable. Checked on every voucher
+        // rather than only at payout, so a recipient learns immediately that a
+        // voucher is unbacked instead of at settlement.
+        if cumulative_amount > allocation.amount {
+            panic!("voucher exceeds the allocation for this recipient");
+        }
+        // Cumulative amounts only ever go up. A voucher at or below what has
+        // already been paid is spent.
+        if cumulative_amount <= allocation.settled {
+            panic!("voucher has already been settled");
+        }
+
+        // Left until last deliberately: the cheap checks above reject a
+        // malformed voucher without paying for a signature verification.
+        voucher::require_valid_signature(
+            env,
+            &signer,
+            channel_id,
+            recipient,
+            sequence,
+            cumulative_amount,
+            signature,
+        );
+    }
+
+    /// Transfer a settled voucher and release its allocation.
+    ///
+    /// `amount` is the cumulative total owed, not an increment: `settled`
+    /// records what has already gone out, so this pays the difference and the
+    /// operation is idempotent in the amount.
+    fn pay_out(env: &Env, channel_id: u64, recipient: &Address, amount: i128, penalty: i128) {
+        let mut channels = Self::load_channels(env);
+        let mut channel = channels.get(channel_id).expect("channel not found");
+
+        let key = DataKey::Allocation(channel_id, recipient.clone());
+        let mut allocation =
+            Self::allocation(env, channel_id, recipient).expect("no allocation for this recipient");
+
+        let due = amount - allocation.settled + penalty;
+        if due < 0 {
+            panic!("nothing owed");
+        }
+        if due > channel.collateral {
+            panic!("insufficient channel collateral");
+        }
+
+        let token_client = token::Client::new(env, &channel.token);
+        token_client.transfer(&env.current_contract_address(), recipient, &due);
+
+        // The whole reservation is released; whatever the recipient did not
+        // claim becomes free collateral again rather than staying locked.
+        channel.allocated -= allocation.amount;
+        channel.collateral -= due;
+        channel.total_spent += due;
+
+        allocation.settled = amount + penalty;
+        allocation.amount = 0;
+        Self::persist(env, &key, &allocation, channel.dispute_ledgers);
+
+        Self::save_channel(env, &mut channels, channel_id, &channel);
+    }
+
     fn ledgers_per_period(period: &SpendPeriod) -> u32 {
         match period {
             SpendPeriod::PerLedger => 1,
@@ -765,5 +1447,10 @@ impl PaymentChannel {
     }
 }
 
+pub mod voucher;
+
 #[cfg(test)]
 mod test;
+
+#[cfg(test)]
+mod test_voucher;

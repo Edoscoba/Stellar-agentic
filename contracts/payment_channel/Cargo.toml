@@ -11,5 +11,9 @@ soroban-sdk = { workspace = true }
 
 [dev-dependencies]
 soroban-sdk = { workspace = true, features = ["testutils"] }
+# Tests have to *produce* voucher signatures the contract will accept. The
+# contract itself only ever verifies, via the host's ed25519_verify, so this is
+# a test-only dependency and never reaches the deployed WASM.
+ed25519-dalek = { version = "2", default-features = false }
 price_oracle = { path = "../price_oracle" }
 amm_swap = { path = "../amm_swap" }

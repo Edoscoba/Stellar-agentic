@@ -1011,6 +1011,7 @@ name = "payment_channel"
 version = "0.1.0"
 dependencies = [
  "amm_swap",
+ "ed25519-dalek",
  "price_oracle",
  "soroban-sdk",
 ]
