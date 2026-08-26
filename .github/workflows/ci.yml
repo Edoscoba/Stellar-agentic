@@ -100,6 +100,59 @@ jobs:
       - name: Build, lint, typecheck, and test
         run: pnpm turbo run build lint typecheck test ${TURBO_FILTERS}
 
+  # ── Rust SDK ──────────────────────────────────────────────────────────────
+  #
+  # Separate from the `contracts` job on purpose. That one builds for
+  # wasm32v1-none against soroban-sdk and resolves from contracts/Cargo.lock;
+  # this crate builds for the host, needs std, and has its own workspace and
+  # lockfile at sdk/rust. Sharing a job would mean sharing a dependency
+  # resolution, which is exactly what contracts/Cargo.lock exists to pin away.
+  sdk-rust:
+    name: SDK (Rust)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk/rust
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: sdk/rust
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      # --all-features compiles the `integration` suite too. Those tests are
+      # #[ignore]d and never run here, but a compile error in them would
+      # otherwise only surface on someone's laptop.
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      # Includes tests/determinism.rs (fixture parity), tests/mock_rpc.rs (the
+      # full invocation pipeline over HTTP against a local stub), and the doc
+      # tests on every public item.
+      - name: Run tests
+        run: cargo test --all-features
+
+      - name: Check the docs build without warnings
+        run: cargo doc --no-deps --all-features
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+      # Catches a manifest that would be rejected at publish time — a missing
+      # description, an unpackageable path dependency — while it is still cheap
+      # to fix, rather than at the moment someone cuts a release.
+      - name: Package (dry run)
+        run: cargo package --allow-dirty --no-verify
+
   # ── Signing service ───────────────────────────────────────────────────────
   #
   # services/signer is the server side of the RemoteSigner protocol. Its own

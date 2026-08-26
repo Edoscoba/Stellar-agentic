@@ -10,7 +10,11 @@
 name = "stellaragent"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.82"
+# Measured, not guessed: reqwest's idna/icu chain needs 1.88. This matters
+# more here than for a binary — cargo uses `rust-version` to pick compatible
+# versions for downstream consumers, so an understated one makes this crate
+# look usable on toolchains where it will not build.
+rust-version = "1.88"
 description = "AI agent payment rails on Stellar — deterministic bid scoring, spend prediction, and a Soroban client"
 documentation = "https://docs.rs/stellaragent"
 repository = "https://github.com/Edoscoba/Stellar-agentic"
