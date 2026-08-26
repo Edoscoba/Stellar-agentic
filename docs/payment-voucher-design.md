@@ -111,23 +111,32 @@ The epic asks that a voucher not be replayable across channels or networks.
 Four things have to be bound in, and the preimage binds all of them:
 
 ```
-preimage (152 bytes, fixed width, no delimiters):
+preimage (151 bytes, fixed width, no delimiters):
 
   offset  len  field
   ──────  ───  ─────────────────────────────────────────────────────────
        0   23  b"STELLARAGENT-VOUCHER-V1"   ASCII, no terminator
-      23   32  network_id                   SHA-256(network passphrase)
-      55   32  contract_id                  this PaymentChannel's raw ID
-      87    8  channel_id                   u64, big-endian
-      95    1  recipient_kind               0x00 = account, 0x01 = contract
-      96   32  recipient                    raw Ed25519 key, or contract ID
-     128    8  sequence                     u64, big-endian
-     136   16  cumulative_amount            i128, big-endian, two's complement
+      23   32  network_id                   env.ledger().network_id()
+      55   32  contract_domain              SHA-256(XDR of this contract's Address)
+      87   32  recipient_domain             SHA-256(XDR of the recipient Address)
+     119    8  channel_id                   u64, big-endian
+     127    8  sequence                     u64, big-endian
+     135   16  cumulative_amount            i128, big-endian, two's complement
   ──────  ───
-            152
+            151
 
 signature = Ed25519(voucher_signer_key, preimage)     // PureEdDSA, RFC 8032
 ```
+
+**Addresses enter as `SHA-256` of their XDR, not as raw key bytes.** The first
+draft of this section specified the raw 32 bytes plus a one-byte kind tag, and
+implementing it showed why that is the wrong call: a contract cannot recover an
+Ed25519 key from an `Address` — the SDK keeps `contract_id()` private — so the
+contract would have to slice the id out of the serialised address at a fixed
+offset, which breaks silently if that encoding ever changes. Hashing the whole
+serialised address is offset-independent, and it distinguishes an account from
+a contract for free, because the two have different XDR discriminants. The kind
+tag is therefore gone and the preimage is 151 bytes rather than 152.
 
 Each field earns its place:
 
@@ -135,9 +144,9 @@ Each field earns its place:
 |---|---|
 | version tag | a v2 voucher being verified by a v1 verifier, or vice versa |
 | `network_id` | a testnet voucher settling on mainnet |
-| `contract_id` | a voucher settling against a *different deployment* of this same contract on the same network |
+| `contract_domain` | a voucher settling against a *different deployment* of this same contract on the same network |
 | `channel_id` | a voucher for a cheap channel settling against a richer one |
-| `recipient_kind` + `recipient` | redirecting a voucher to a different payee |
+| `recipient_domain` | redirecting a voucher to a different payee |
 | `sequence` | ordering and audit — see the next section |
 | `cumulative_amount` | the claim itself |
 
